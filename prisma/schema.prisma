@@ -1,0 +1,216 @@
+// Personal Fitness Tracker — Prisma schema (Phase 1)
+// One database for all personal health & training data.
+//
+// Design note: SQLite is used for a single-user local-first tool. It is simple,
+// zero-config, and the file is the whole database (easy to back up). The schema
+// is intentionally additive-friendly so that food_log, supplements and meds can
+// be bolted on later without migrating existing tables (see DECISIONS.md).
+//
+// SQLite has no native enum / json types, so "enum-like" columns are stored as
+// String with the allowed values documented inline, and "json" columns are
+// stored as String (serialised JSON). Helpers in src/lib enforce the values.
+
+generator client {
+  provider        = "prisma-client-js"
+  // driverAdapters lets the runtime swap the built-in SQLite engine for the
+  // libSQL driver adapter, so the SAME schema runs on a local SQLite file
+  // (dev, before keys) and on Turso/libSQL in the cloud (see src/lib/prisma.ts).
+  previewFeatures = ["driverAdapters"]
+}
+
+// libSQL/Turso is SQLite-compatible, so the provider stays "sqlite" and the
+// schema is portable between a local file and the cloud DB. DATABASE_URL points
+// at the local file for dev; when TURSO_DATABASE_URL + TURSO_AUTH_TOKEN are set,
+// the client connects to Turso via the driver adapter instead.
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Single-row profile for the one athlete using this app.
+model AthleteProfile {
+  id        Int      @id @default(autoincrement())
+  name      String? // display name, editable in settings (e.g. "Oliver Leonard")
+  goalsJson String?  @map("goals") // json: free-form goals object
+  baselines String?  // json: baseline measurements (InBody baseline etc.)
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("athlete_profile")
+}
+
+/// A training session. Parent of strength_sets, runs and planned_exercises.
+///
+/// `status` drives the planned→completed lifecycle: a `planned` session is a
+/// ready-to-go template (movements + target sets/reps/weights, optionally
+/// supersetted) that appears in the Today/Upcoming view; logging actuals against
+/// it flips it to `completed` and it flows into history + metrics. A quick log
+/// from scratch is created straight as `completed`.
+model Session {
+  id           Int       @id @default(autoincrement())
+  date         DateTime
+  type         String // Foundation | Power | Aerobic | Run | Class
+  status       String    @default("completed") // planned | completed
+  title        String?
+  durationMin  Int?      @map("duration_min")
+  location     String?   @default("Third Space Wimbledon")
+  energyPre    Int?      @map("energy_pre") // 1-5
+  rpeOverall   Int?      @map("rpe_overall") // 1-10
+  cooldownDone Boolean   @default(false) @map("cooldown_done") // 10-min cooldown (Foundation)
+  source       String    @default("manual") // manual | strava | plan-api
+  externalId   String?   @map("external_id") // e.g. Strava activity id (dedupe)
+  notes        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  strengthSets     StrengthSet[]
+  runs             Run[]
+  plannedExercises PlannedExercise[]
+
+  @@unique([source, externalId])
+  @@index([date])
+  @@index([status])
+  @@map("sessions")
+}
+
+/// A planned movement on a `planned` session — the template the athlete opens
+/// at the gym. Targets are optional; supersetGroup ties movements performed
+/// back-to-back into one superset (e.g. all movements tagged "A"). When the
+/// session is completed, actual StrengthSet rows are logged against these.
+model PlannedExercise {
+  id             Int     @id @default(autoincrement())
+  sessionId      Int     @map("session_id")
+  order          Int     @default(0) // display order within the session
+  exerciseName   String  @map("exercise_name")
+  targetSets     Int?    @map("target_sets")
+  targetReps     Int?    @map("target_reps")
+  targetWeightKg Float?  @map("target_weight_kg")
+  supersetGroup  String? @map("superset_group") // e.g. "A", "B" — shared = superset
+  notes          String?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("planned_exercises")
+}
+
+/// A single strength set belonging to a session.
+model StrengthSet {
+  id           Int     @id @default(autoincrement())
+  sessionId    Int     @map("session_id")
+  exerciseName String  @map("exercise_name")
+  setNo        Int     @map("set_no")
+  reps         Int?
+  weightKg     Float?  @map("weight_kg")
+  rpe          Int? // 1-10
+  notes        String?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("strength_sets")
+}
+
+/// A run belonging to a session. Strava = source of truth for distance/pace;
+/// COROS = HR. Samsung Health / Galaxy Watch distance is ignored on ingest.
+model Run {
+  id             Int     @id @default(autoincrement())
+  sessionId      Int     @map("session_id")
+  distanceKm     Float?  @map("distance_km")
+  durationMin    Float?  @map("duration_min")
+  avgPace        String? @map("avg_pace") // e.g. "5:12 /km"
+  avgHr          Int?    @map("avg_hr")
+  maxHr          Int?    @map("max_hr")
+  // HR provenance from the priority hierarchy: COROS | Technogym | Samsung.
+  // Samsung is a flagged fallback (Elvanse-inflated) but still logged.
+  hrSource       String? @map("hr_source")
+  // Eccentric calf raises (3×15, slow lower) after every run — surfaced as a
+  // visible checkbox when logging any session with a run component.
+  calfRaisesDone Boolean @default(false) @map("calf_raises_done")
+  notes          String?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("runs")
+}
+
+/// Body composition checkpoints. InBody = accurate checkpoint; Withings = daily
+/// trend. Both are stored as distinct rows (distinguished by `source`) and are
+/// NEVER averaged together — the dashboard plots them as separate series.
+model BodyComposition {
+  id                   Int      @id @default(autoincrement())
+  date                 DateTime
+  source               String // InBody | Withings
+  weightKg             Float?   @map("weight_kg")
+  bodyFatPct           Float?   @map("body_fat_pct")
+  skeletalMuscleMassKg Float?   @map("skeletal_muscle_mass_kg")
+  visceralFat          Float?   @map("visceral_fat")
+  bmr                  Int?
+  raw                  String? // json: full extracted/source payload
+  createdAt            DateTime @default(now())
+
+  @@index([date])
+  @@index([source])
+  @@map("body_composition")
+}
+
+/// Quick daily check-in.
+model DailyCheckin {
+  id              Int      @id @default(autoincrement())
+  date            DateTime @unique
+  sleepHours      Float?   @map("sleep_hours")
+  sleepQuality    Int?     @map("sleep_quality") // 1-5
+  energyMorning   Int?     @map("energy_morning") // 1-5
+  energyAfternoon Int?     @map("energy_afternoon") // 1-5
+  energyEvening   Int?     @map("energy_evening") // 1-5
+  soreness        Int? // 1-5
+  mood            Int? // 1-5
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([date])
+  @@map("daily_checkin")
+}
+
+/// Trackable health & fitness goals (body composition, run times, the Hyrox
+/// event, training consistency, etc.).
+model Goal {
+  id           Int       @id @default(autoincrement())
+  name         String
+  targetValue  Float?    @map("target_value")
+  currentValue Float?    @map("current_value")
+  unit         String? // e.g. "kg", "reps", "s", "min"
+  targetDate   DateTime? @map("target_date")
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("goals")
+}
+
+/// Sync bookkeeping for external integrations.
+model SyncState {
+  source       String    @id // strava | withings
+  lastSyncedAt DateTime? @map("last_synced_at")
+  status       String    @default("disconnected") // disconnected | connected | error | syncing
+  message      String? // last error / status detail
+  // OAuth token storage (left blank until the user connects the integration).
+  accessToken  String?   @map("access_token")
+  refreshToken String?   @map("refresh_token")
+  expiresAt    DateTime? @map("expires_at")
+  updatedAt    DateTime  @updatedAt
+
+  @@map("sync_state")
+}
+
+// ---------------------------------------------------------------------------
+// FUTURE (Phase 2+) — intentionally NOT built now. Documented here as the
+// designed extension point. Add as new models without touching the above:
+//   model FoodLog      { ... date, items(json), kcal, protein_g, ... }
+//   model Supplement   { ... date, name, dose, timing, ... }
+//   model Med          { ... date, name, dose, timing, ... }
+// A future native Android companion can POST Health Connect data to dedicated
+// /api/health-connect/* ingest routes (see README integration notes).
+// ---------------------------------------------------------------------------

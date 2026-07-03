@@ -1,0 +1,408 @@
+/* =============================================================================
+   Cobalt · Electric — design system
+   Single blue accent (OKLCH hue 255), deep-charcoal dark mode (not #000) and a
+   clean light mode. Extracted verbatim from the Claude Design mockups so the app
+   consumes ONE theme. Everything else should reference these variables.
+   Modes: dark (default) and light, switched via [data-theme] on <html>.
+   ============================================================================= */
+
+:root {
+  /* --- accent (dark) --- */
+  --accent:        oklch(0.82 0.13 255);
+  --on-accent:     oklch(0.17 0.03 255);
+  --accent-soft:   oklch(0.82 0.13 255 / 0.16);
+  --accent-soft2:  oklch(0.82 0.13 255 / 0.32);
+  --accent-line:   oklch(0.82 0.13 255 / 0.38);
+  --accent-glow:   oklch(0.78 0.14 255 / 0.5);
+  --accent-tint:   oklch(0.82 0.13 255 / 0.07);
+  --ok-tint:       oklch(0.82 0.13 255 / 0.16);
+
+  /* --- surfaces (dark) --- */
+  --bg:            oklch(0.165 0.014 255);
+  --surface:       rgba(255, 255, 255, 0.055);
+  --surface-strong:rgba(255, 255, 255, 0.09);
+  --border:        rgba(255, 255, 255, 0.10);
+  --track:         rgba(255, 255, 255, 0.11);
+  --last-bg:       rgba(255, 255, 255, 0.04);
+  --key-bg:        rgba(255, 255, 255, 0.07);
+  --seg-track:     rgba(255, 255, 255, 0.06);
+
+  /* --- text (dark) --- */
+  --text:          oklch(0.97 0.006 255);
+  --text-dim:      oklch(0.72 0.012 255);
+  --text-faint:    oklch(0.56 0.012 255);
+
+  /* --- chrome (dark) --- */
+  --tab-bg:        rgba(17, 18, 23, 0.72);
+  --panel-bg:      rgba(20, 21, 27, 0.85);
+  --footer-bg:     rgba(20, 21, 27, 0.82);
+  --thumb-border:  oklch(0.17 0.02 255);
+  --shadow:        0 34px 80px -28px rgba(0, 0, 0, 0.9);
+
+  /* the app background: a soft cobalt bloom over deep charcoal */
+  --bg-grad: radial-gradient(130% 55% at 86% -12%, oklch(0.72 0.15 255 / 0.18), transparent 58%);
+
+  --r-lg: 24px;
+  --r-md: 18px;
+  --r-sm: 14px;
+  --r-pill: 999px;
+  --font-body: 'Geist', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SF Mono', monospace;
+}
+
+:root[data-theme='light'] {
+  --accent:        oklch(0.56 0.16 255);
+  --on-accent:     #ffffff;
+  --accent-soft:   oklch(0.56 0.16 255 / 0.12);
+  --accent-soft2:  oklch(0.56 0.16 255 / 0.22);
+  --accent-line:   oklch(0.56 0.16 255 / 0.32);
+  --accent-glow:   oklch(0.60 0.16 255 / 0.5);
+  --accent-tint:   oklch(0.56 0.16 255 / 0.06);
+  --ok-tint:       oklch(0.56 0.16 255 / 0.12);
+
+  --bg:            oklch(0.975 0.006 255);
+  --surface:       rgba(255, 255, 255, 0.66);
+  --surface-strong:rgba(255, 255, 255, 0.9);
+  --border:        rgba(15, 23, 42, 0.08);
+  --track:         rgba(15, 23, 42, 0.10);
+  --last-bg:       rgba(15, 23, 42, 0.035);
+  --key-bg:        rgba(255, 255, 255, 0.95);
+  --seg-track:     rgba(15, 23, 42, 0.05);
+
+  --text:          oklch(0.25 0.02 255);
+  --text-dim:      oklch(0.45 0.015 255);
+  --text-faint:    oklch(0.58 0.012 255);
+
+  --tab-bg:        rgba(255, 255, 255, 0.80);
+  --panel-bg:      rgba(248, 249, 251, 0.9);
+  --footer-bg:     rgba(248, 249, 251, 0.85);
+  --thumb-border:  #ffffff;
+  --shadow:        0 34px 80px -30px rgba(15, 23, 42, 0.35);
+
+  --bg-grad: radial-gradient(130% 55% at 86% -12%, oklch(0.72 0.15 255 / 0.12), transparent 58%);
+}
+
+/* Follow the OS when the user hasn't explicitly chosen a theme. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']):not([data-theme='light']) {
+    --accent: oklch(0.56 0.16 255);
+    --on-accent: #ffffff;
+    --accent-soft: oklch(0.56 0.16 255 / 0.12);
+    --accent-soft2: oklch(0.56 0.16 255 / 0.22);
+    --accent-line: oklch(0.56 0.16 255 / 0.32);
+    --accent-glow: oklch(0.60 0.16 255 / 0.5);
+    --accent-tint: oklch(0.56 0.16 255 / 0.06);
+    --ok-tint: oklch(0.56 0.16 255 / 0.12);
+    --bg: oklch(0.975 0.006 255);
+    --surface: rgba(255, 255, 255, 0.66);
+    --surface-strong: rgba(255, 255, 255, 0.9);
+    --border: rgba(15, 23, 42, 0.08);
+    --track: rgba(15, 23, 42, 0.10);
+    --last-bg: rgba(15, 23, 42, 0.035);
+    --key-bg: rgba(255, 255, 255, 0.95);
+    --seg-track: rgba(15, 23, 42, 0.05);
+    --text: oklch(0.25 0.02 255);
+    --text-dim: oklch(0.45 0.015 255);
+    --text-faint: oklch(0.58 0.012 255);
+    --tab-bg: rgba(255, 255, 255, 0.80);
+    --panel-bg: rgba(248, 249, 251, 0.9);
+    --footer-bg: rgba(248, 249, 251, 0.85);
+    --thumb-border: #ffffff;
+    --shadow: 0 34px 80px -30px rgba(15, 23, 42, 0.35);
+    --bg-grad: radial-gradient(130% 55% at 86% -12%, oklch(0.72 0.15 255 / 0.12), transparent 58%);
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+
+body {
+  background: var(--bg-grad), var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  line-height: 1.5;
+  overflow-x: hidden;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+button { font-family: var(--font-body); }
+
+/* Material Symbols Rounded icon helpers ------------------------------------- */
+.msr, .msr-fill {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  direction: ltr;
+  -webkit-font-feature-settings: 'liga';
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  vertical-align: middle;
+}
+.msr-fill { font-variation-settings: 'FILL' 1, 'wght' 500, 'GRAD' 0, 'opsz' 24; }
+
+/* --- App shell ------------------------------------------------------------- */
+.app {
+  position: relative;
+  z-index: 1;
+  max-width: 460px;
+  margin: 0 auto;
+  padding: 0 18px calc(102px + env(safe-area-inset-bottom));
+  min-height: 100vh;
+}
+/* Screens with their own fixed footer/panel (log, checkin, capture) opt out of
+   the tab-bar bottom padding. */
+.app.has-footer { padding-bottom: 0; }
+
+/* --- Header / titles ------------------------------------------------------- */
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 9px;
+  padding: 14px 2px 12px;
+}
+.h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+.h1-lg { font-size: 30px; font-weight: 700; letter-spacing: -0.03em; }
+.h2 { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px; font-weight: 600;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.eyebrow-accent { color: var(--accent); }
+.sub { color: var(--text-faint); font-size: 11px; font-weight: 500; letter-spacing: 0.01em; }
+.dim { color: var(--text-dim); }
+.faint { color: var(--text-faint); }
+.section-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 22px 2px 12px;
+}
+
+/* --- Cards ----------------------------------------------------------------- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 16px;
+  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(20px);
+}
+.card + .card { margin-top: 12px; }
+.card-md { border-radius: var(--r-md); }
+.card-tinted { background: var(--accent-tint); border-color: var(--accent-line); }
+
+.stack { display: flex; flex-direction: column; }
+.stack-12 > * + * { margin-top: 12px; }
+.stack-11 > * + * { margin-top: 11px; }
+.stack-9  > * + * { margin-top: 9px; }
+
+/* --- Buttons --------------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; height: 52px;
+  border: none; border-radius: 15px;
+  background: var(--accent); color: var(--on-accent);
+  font-size: 15.5px; font-weight: 600; letter-spacing: -0.01em;
+  cursor: pointer;
+  box-shadow: 0 14px 30px -10px var(--accent-glow);
+}
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: 0.55; cursor: default; box-shadow: none; }
+.btn-lg { height: 54px; border-radius: 16px; font-size: 16px; box-shadow: 0 16px 34px -10px var(--accent-glow); }
+.btn-secondary {
+  background: var(--surface); color: var(--text);
+  border: 1px solid var(--border); box-shadow: none;
+}
+.btn-ghost {
+  background: transparent; color: var(--text-dim);
+  border: 1px dashed var(--border); box-shadow: none;
+}
+.btn-sm { width: auto; height: 38px; padding: 0 14px; border-radius: 11px; font-size: 13px; }
+
+/* round icon button (back / edit / settings in headers) */
+.icon-btn {
+  width: 38px; height: 38px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 21px; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; cursor: pointer;
+}
+.icon-btn.dim { color: var(--text-dim); }
+
+/* --- Pills / chips --------------------------------------------------------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surface-strong); border: 1px solid var(--border);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.01em; color: var(--text-dim);
+  cursor: pointer; user-select: none;
+}
+.chip.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.chip .msr, .chip .msr-fill { color: var(--text-faint); font-size: 14px; }
+.chip.active .msr, .chip.active .msr-fill { color: var(--on-accent); }
+
+.type-chip {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 9px;
+  border-radius: 7px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  background: var(--accent-soft); color: var(--accent);
+}
+
+/* --- Segmented control ----------------------------------------------------- */
+.seg {
+  display: flex; gap: 6px; padding: 4px;
+  background: var(--seg-track); border-radius: 13px;
+}
+.seg-item {
+  flex: 1; height: 34px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  border-radius: 10px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+  color: var(--text-dim); background: transparent; border: none;
+}
+.seg-item.active { background: var(--accent); color: var(--on-accent); }
+
+/* --- Forms ----------------------------------------------------------------- */
+label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 8px; font-weight: 600; }
+input, select, textarea {
+  width: 100%;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  font: inherit; font-size: 15px;
+  padding: 12px 13px;
+  outline: none;
+}
+input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+textarea { resize: vertical; min-height: 42px; line-height: 1.4; }
+.field { margin-bottom: 14px; }
+.row { display: flex; gap: 10px; }
+.row > * { flex: 1; }
+
+/* --- Notes / banners ------------------------------------------------------- */
+.note {
+  border-radius: 12px; padding: 12px 14px; font-size: 13px; margin-bottom: 12px;
+  display: flex; gap: 8px; align-items: flex-start;
+}
+.note-accent { background: var(--accent-tint); border: 1px solid var(--accent-line); color: var(--text-dim); }
+.note-accent .msr, .note-accent .msr-fill { color: var(--accent); }
+.note-err { background: oklch(0.6 0.19 25 / 0.12); border: 1px solid oklch(0.6 0.19 25 / 0.35); color: oklch(0.72 0.16 25); }
+.note-ok  { background: var(--ok-tint); border: 1px solid var(--accent-line); color: var(--accent); }
+
+/* --- Lists ----------------------------------------------------------------- */
+.list-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 13px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  cursor: pointer;
+}
+.list-row .meta { font-size: 11.5px; color: var(--text-faint); font-weight: 500; }
+.empty { color: var(--text-faint); text-align: center; padding: 22px 0; font-size: 13px; }
+
+/* --- Stat tiles ------------------------------------------------------------ */
+.stat-row { display: flex; gap: 9px; }
+.tile {
+  flex: 1; min-width: 0;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 12px;
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+.tile .num { font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+
+/* --- Bottom tab bar with center FAB --------------------------------------- */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+  height: calc(80px + env(safe-area-inset-bottom));
+  padding: 10px 20px calc(18px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; justify-content: space-between;
+  max-width: 460px; margin: 0 auto;
+  background: var(--tab-bg); border-top: 1px solid var(--border);
+  -webkit-backdrop-filter: blur(28px); backdrop-filter: blur(28px);
+}
+.tabbar a, .tabbar .tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+  color: var(--text-faint);
+}
+.tabbar a.active { color: var(--accent); }
+.tabbar .tab-ico { font-size: 23px; }
+.tabbar .tab-lbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.04em; }
+.tabbar .fab-slot { flex: 1; display: flex; justify-content: center; }
+.fab {
+  width: 52px; height: 52px; margin-top: -24px;
+  border-radius: 18px; background: var(--accent); color: var(--on-accent);
+  display: flex; align-items: center; justify-content: center; font-size: 28px;
+  box-shadow: 0 12px 26px -6px var(--accent-glow);
+}
+
+/* --- Rings / misc ---------------------------------------------------------- */
+.spin {
+  display: inline-block; width: 1em; height: 1em;
+  border: 2px solid currentColor; border-right-color: transparent;
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.fab-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* =============================================================================
+   Backwards-compat layer — maps the earlier class names onto the new theme so
+   screens that predate the redesign (quick-log, sync, create-plan) still render
+   on-brand in Cobalt · Electric. New screens use the classes above.
+   ============================================================================= */
+.page-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
+.page-sub { color: var(--text-dim); font-size: 13px; margin-bottom: 18px; }
+.section-label {
+  font-family: var(--font-mono); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-faint); margin: 22px 2px 10px; font-weight: 600;
+}
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn.secondary { background: var(--surface); color: var(--text); border: 1px solid var(--border); box-shadow: none; }
+.btn.ghost { background: transparent; color: var(--text-dim); border: 1px dashed var(--border); box-shadow: none; }
+.btn.danger { background: transparent; border: 1px solid oklch(0.6 0.19 25); color: oklch(0.68 0.18 25); box-shadow: none; }
+
+.warn { background: var(--accent-tint); border: 1px solid var(--accent-line); color: var(--text-dim); border-radius: 12px; padding: 12px 14px; font-size: 13px; margin-bottom: 12px; }
+.ok-note { background: var(--ok-tint); border: 1px solid var(--accent-line); color: var(--accent); border-radius: 12px; padding: 12px 14px; font-size: 13px; margin-bottom: 12px; }
+.err-note { background: oklch(0.6 0.19 25 / 0.12); border: 1px solid oklch(0.6 0.19 25 / 0.35); color: oklch(0.72 0.16 25); border-radius: 12px; padding: 12px 14px; font-size: 13px; margin-bottom: 12px; }
+
+/* 1–5 / 1–10 scale selector (Scale component) */
+.scale { display: flex; gap: 6px; }
+.scale button {
+  flex: 1; aspect-ratio: 1; min-width: 0; padding: 0;
+  background: var(--surface-strong); border: 1px solid var(--border);
+  border-radius: 11px; color: var(--text-dim); font-size: 15px; font-weight: 600; cursor: pointer;
+}
+.scale button.active { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+
+/* pills / badges */
+.pill { display: inline-block; font-size: 10px; padding: 3px 8px; border-radius: 7px; font-weight: 700; letter-spacing: 0.05em; background: var(--accent-soft); color: var(--accent); text-transform: uppercase; }
+.pill.foundation, .pill.power, .pill.aerobic, .pill.run, .pill.class,
+.pill.manual, .pill.strava, .pill.inbody, .pill.withings { background: var(--accent-soft); color: var(--accent); }
+.pill.manual { background: var(--surface-strong); color: var(--text-faint); }
+
+/* stat grid / list-item */
+.stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md); padding: 13px; text-align: center; }
+.stat .num { font-size: 22px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.02em; }
+.stat .lbl { font-size: 9px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 3px; }
+.list-item { display: flex; align-items: center; justify-content: space-between; padding: 13px 0; border-bottom: 1px solid var(--border); }
+.list-item:last-child { border-bottom: none; }
+.list-item .meta { font-size: 11.5px; color: var(--text-faint); }
+
+/* charts */
+.chart { width: 100%; height: auto; display: block; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+.muted { color: var(--text-faint); font-weight: 400; font-size: 12px; }
+.setting-row:first-child { border-top: none !important; }
