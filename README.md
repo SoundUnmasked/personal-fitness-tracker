@@ -14,7 +14,7 @@ saving marks it **completed**, and it flows into history + metrics. One shared
 database. No re-typing.
 
 All data lives in **one database** (local SQLite for dev; **Turso/libSQL** in the
-cloud) via Prisma. 
+cloud) via Prisma.
 
 ---
 
