@@ -12,8 +12,9 @@ const tabs = [
 ];
 
 // Full-screen flows have their own fixed footer (Save / Start), so the tab bar
-// is hidden on them to match the mockups.
-const HIDE_ON = ['/checkin', '/inbody', '/plan/new', '/plan/'];
+// is hidden on them to match the mockups. /unlock is the pre-auth gate — no
+// navigation exists yet.
+const HIDE_ON = ['/checkin', '/inbody', '/plan/new', '/plan/', '/unlock'];
 
 export default function BottomNav() {
   const path = usePathname();

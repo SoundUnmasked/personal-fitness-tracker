@@ -128,7 +128,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
 
-  const cols = '24px 58px 1fr 1fr 1fr 32px';
+  // Last column holds the set-done toggle — 44px so the most-tapped control
+  // in the gym meets the minimum comfortable touch-target size.
+  const cols = '24px 58px 1fr 1fr 1fr 44px';
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
 
   return (
@@ -191,7 +193,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       <Cell active={active.ei === index && active.si === si && active.field === 'kg'} filled={st.kg !== ''} onClick={() => tap(index, si, 'kg')} value={st.kg} />
                       <Cell active={active.ei === index && active.si === si && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
                       <Cell active={active.ei === index && active.si === si && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
-                      <button onClick={() => toggle(index, si)} style={{ width: 30, height: 30, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 17, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
+                      <button onClick={() => toggle(index, si)} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
                         <span className="msr-fill">check</span>
                       </button>
                     </div>

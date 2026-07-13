@@ -9,6 +9,9 @@ import {
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 
+// Cap uploads before buffering them into memory / sending to the vision API.
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
 // POST /api/inbody/extract  (multipart form-data)
 //   fields: photo (file, required), save ("true" to persist a body_comp row)
 // Returns the extracted JSON; when save=true also writes an InBody row.
@@ -21,6 +24,18 @@ export async function POST(req: NextRequest) {
         configured: false,
       },
       { status: 503 },
+    );
+  }
+
+  // Reject oversized uploads up front with a clear 413. (Next's middleware
+  // body limit already truncates bodies >10 MB, which would otherwise surface
+  // as a confusing multipart parse failure.) The small allowance on top of the
+  // cap is for multipart framing overhead; file.size below is the exact check.
+  const contentLength = Number(req.headers.get('content-length') ?? '0');
+  if (contentLength > MAX_UPLOAD_BYTES + 64 * 1024) {
+    return NextResponse.json(
+      { error: 'photo must be 10 MB or smaller' },
+      { status: 413 },
     );
   }
 
@@ -47,6 +62,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { error: 'photo must be an image' },
       { status: 400 },
+    );
+  }
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return NextResponse.json(
+      { error: 'photo must be 10 MB or smaller' },
+      { status: 413 },
     );
   }
 
