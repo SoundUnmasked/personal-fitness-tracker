@@ -21,6 +21,8 @@ CREATE TABLE "sessions" (
     "energy_pre" INTEGER,
     "rpe_overall" INTEGER,
     "cooldown_done" BOOLEAN NOT NULL DEFAULT false,
+    "warmup" TEXT,
+    "cooldown" TEXT,
     "source" TEXT NOT NULL DEFAULT 'manual',
     "external_id" TEXT,
     "notes" TEXT,
@@ -37,6 +39,10 @@ CREATE TABLE "planned_exercises" (
     "target_sets" INTEGER,
     "target_reps" INTEGER,
     "target_weight_kg" REAL,
+    "rest_seconds" INTEGER,
+    "set_style" TEXT,
+    "duration_seconds" INTEGER,
+    "tempo" TEXT,
     "superset_group" TEXT,
     "notes" TEXT,
     CONSTRAINT "planned_exercises_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE CASCADE
@@ -50,6 +56,7 @@ CREATE TABLE "strength_sets" (
     "set_no" INTEGER NOT NULL,
     "reps" INTEGER,
     "weight_kg" REAL,
+    "duration_seconds" INTEGER,
     "rpe" INTEGER,
     "notes" TEXT,
     CONSTRAINT "strength_sets_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE CASCADE

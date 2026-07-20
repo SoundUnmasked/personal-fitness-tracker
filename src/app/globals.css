@@ -425,3 +425,9 @@ textarea { resize: vertical; min-height: 42px; line-height: 1.4; }
 .legend .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 .muted { color: var(--text-faint); font-weight: 400; font-size: 12px; }
 .setting-row:first-child { border-top: none !important; }
+
+/* Collapsible warm-up / cool-down blocks (native <details>) */
+details > summary { list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary .chev { transition: transform 0.15s ease; }
+details[open] > summary .chev { transform: rotate(180deg); }

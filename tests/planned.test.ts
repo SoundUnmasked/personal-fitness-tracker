@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { validatePlannedSession } from '@/lib/plannedSessions';
+import {
+  validatePlannedSession,
+  tempoOrNull,
+  setStyleOrNull,
+  nonNegIntOrNull,
+} from '@/lib/plannedSessions';
 
 describe('validatePlannedSession', () => {
   const good = {
@@ -62,5 +67,66 @@ describe('validatePlannedSession', () => {
   it('rejects a non-object body', () => {
     expect(validatePlannedSession(null).ok).toBe(false);
     expect(validatePlannedSession('nope').ok).toBe(false);
+  });
+
+  it('parses per-exercise rest, tempo, duration and session warm/cool-down', () => {
+    const r = validatePlannedSession({
+      type: 'Power',
+      date: '2026-07-06',
+      warmup: '5 min bike',
+      cooldown: 'Couch stretch',
+      exercises: [
+        { name: 'Back Squat', sets: 4, reps: 6, restSeconds: 150, tempo: '31x1' },
+        { name: "Farmer's Carry", setStyle: 'duration', durationSeconds: 45, weightKg: 32 },
+        { name: 'Dead Hang', durationSeconds: 30 }, // duration inferred from durationSeconds
+      ],
+    });
+    expect(r.ok).toBe(true);
+    expect(r.value?.warmup).toBe('5 min bike');
+    expect(r.value?.cooldown).toBe('Couch stretch');
+    expect(r.value?.exercises[0].restSeconds).toBe(150);
+    expect(r.value?.exercises[0].tempo).toBe('31X1'); // normalised upper-case
+    expect(r.value?.exercises[1].setStyle).toBe('duration');
+    expect(r.value?.exercises[1].durationSeconds).toBe(45);
+    expect(r.value?.exercises[2].setStyle).toBe('duration'); // inferred
+  });
+
+  it('leaves rep-style movements without a duration style', () => {
+    const r = validatePlannedSession({
+      type: 'Foundation',
+      date: '2026-07-06',
+      exercises: [{ name: 'Bench Press', sets: 3, reps: 8 }],
+    });
+    expect(r.value?.exercises[0].setStyle).toBeNull();
+    expect(r.value?.exercises[0].restSeconds).toBeNull();
+    expect(r.value?.exercises[0].tempo).toBeNull();
+  });
+});
+
+describe('field helpers', () => {
+  it('tempoOrNull accepts 2–4 digit/X tempos and rejects junk', () => {
+    expect(tempoOrNull('3030')).toBe('3030');
+    expect(tempoOrNull('31x1')).toBe('31X1');
+    expect(tempoOrNull('30')).toBe('30');
+    expect(tempoOrNull('30301')).toBeNull(); // too long
+    expect(tempoOrNull('fast')).toBeNull();
+    expect(tempoOrNull(303)).toBeNull(); // not a string
+    expect(tempoOrNull('')).toBeNull();
+  });
+
+  it('setStyleOrNull canonicalises known styles only', () => {
+    expect(setStyleOrNull('duration')).toBe('duration');
+    expect(setStyleOrNull('Duration')).toBe('duration');
+    expect(setStyleOrNull('reps')).toBe('reps');
+    expect(setStyleOrNull('time')).toBeNull();
+    expect(setStyleOrNull(null)).toBeNull();
+  });
+
+  it('nonNegIntOrNull rejects negatives and blanks', () => {
+    expect(nonNegIntOrNull('150')).toBe(150);
+    expect(nonNegIntOrNull(0)).toBe(0);
+    expect(nonNegIntOrNull(-5)).toBeNull();
+    expect(nonNegIntOrNull('')).toBeNull();
+    expect(nonNegIntOrNull('abc')).toBeNull();
   });
 });

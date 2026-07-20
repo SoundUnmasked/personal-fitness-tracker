@@ -213,19 +213,38 @@ Authorization: Bearer <PLANNED_SESSIONS_API_KEY>
   "title": "Lower body + sled",  // optional
   "location": "Third Space Wimbledon", // optional (defaults to this)
   "notes": "tempo focus",        // optional
+  "warmup": "5 min bike\n2×10 leg swings", // optional: structured warm-up text
+  "cooldown": "Couch stretch 2×60s",       // optional: structured cool-down text
   "exercises": [                 // required: at least one
     {
       "name": "Back Squat",      // required
       "sets": 4,                 // optional target sets
       "reps": 6,                 // optional target reps
       "weightKg": 100,           // optional target working weight
+      "restSeconds": 150,        // optional rest between sets (logger falls back to 90s)
+      "tempo": "31X1",           // optional lifting tempo (2–4 chars, digits or X)
       "superset": "A",           // optional: same tag = one superset
-      "notes": "3-1-1 tempo"     // optional
+      "notes": "brace hard"      // optional
     },
-    { "name": "Pull-ups", "sets": 3, "reps": 10, "superset": "A" }
+    { "name": "Pull-ups", "sets": 3, "reps": 10, "superset": "A" },
+    {
+      "name": "Farmer's Carry",  // time-based movement
+      "setStyle": "duration",    // optional: "reps" (default) | "duration"
+      "durationSeconds": 45,     // optional target hold/carry time (implies duration style)
+      "weightKg": 32,            // duration movements may still carry weight
+      "sets": 3,
+      "restSeconds": 90
+    }
   ]
 }
 ```
+
+**Per-exercise extras** (all optional): `restSeconds` drives the logger's rest
+timer (default 90s); `tempo` (e.g. `"3030"`, `"31X1"`) enables a tempo metronome
+in the logger; `setStyle: "duration"` (or simply providing `durationSeconds`)
+makes a movement time-based — the logger shows a hold-time field with a count-up
+timer instead of reps, while `weightKg` still applies (e.g. Farmer's Carry).
+Session-level `warmup` / `cooldown` render as their own collapsible blocks.
 
 **Responses:**
 

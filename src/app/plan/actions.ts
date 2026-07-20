@@ -8,6 +8,7 @@ import {
   intOrNull,
   floatOrNull,
   strOrNull,
+  nonNegIntOrNull,
   type ActualSetInput,
   type CompletePlanInput,
 } from '@/lib/plannedSessions';
@@ -97,6 +98,7 @@ export async function completePlanAction(
               setNo: s.setNo ?? i + 1,
               reps: intOrNull(s.reps),
               weightKg: floatOrNull(s.weightKg),
+              durationSeconds: nonNegIntOrNull(s.durationSeconds),
               rpe: intOrNull(s.rpe),
               notes: strOrNull(s.notes),
             })),

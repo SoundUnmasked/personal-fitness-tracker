@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import { shortDate } from '@/lib/format';
+import StructuredBlock from '@/components/StructuredBlock';
 
 export interface CompletedSet {
   exerciseName: string;
   setNo: number;
   reps: number | null;
   weightKg: number | null;
+  durationSeconds: number | null;
   rpe: number | null;
   notes: string | null;
 }
@@ -29,6 +31,8 @@ export interface CompletedSession {
   rpeOverall: number | null;
   energyPre: number | null;
   cooldownDone: boolean;
+  warmup: string | null;
+  cooldown: string | null;
   source: string;
   notes: string | null;
   sets: CompletedSet[];
@@ -83,6 +87,9 @@ export default function CompletedView({ session }: { session: CompletedSession }
         </div>
       )}
 
+      {/* Structured warm-up */}
+      {session.warmup && <StructuredBlock kind="warmup" text={session.warmup} />}
+
       {/* Run block */}
       {run && (
         <>
@@ -122,7 +129,8 @@ export default function CompletedView({ session }: { session: CompletedSession }
                     <div key={si} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderTop: si === 0 ? 'none' : '1px solid var(--border)' }}>
                       <div style={{ width: 22, flex: 'none', fontSize: 12, fontWeight: 700, color: 'var(--text-faint)' }}>{s.setNo}</div>
                       <div style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}>
-                        {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : <span style={{ color: 'var(--text-faint)' }}>—</span>}
+                        {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>—</span> : null}
+                        {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{s.durationSeconds}s</span>}
                         {s.reps != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> × {s.reps}</span>}
                         {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}</span>}
                       </div>
@@ -138,6 +146,9 @@ export default function CompletedView({ session }: { session: CompletedSession }
           </div>
         </>
       )}
+
+      {/* Structured cool-down */}
+      {session.cooldown && <StructuredBlock kind="cooldown" text={session.cooldown} />}
 
       <div style={{ height: 20 }} />
     </>
