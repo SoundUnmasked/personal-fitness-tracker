@@ -58,6 +58,10 @@ model Session {
   energyPre    Int?      @map("energy_pre") // 1-5
   rpeOverall   Int?      @map("rpe_overall") // 1-10
   cooldownDone Boolean   @default(false) @map("cooldown_done") // 10-min cooldown (Foundation)
+  // Structured warm-up / cool-down text (previously squeezed into `notes`).
+  // Free-form prose; rendered as their own collapsible blocks in the session view.
+  warmup       String? // planned warm-up routine (text)
+  cooldown     String? // planned cool-down routine (text)
   source       String    @default("manual") // manual | strava | plan-api
   externalId   String?   @map("external_id") // e.g. Strava activity id (dedupe)
   notes        String?
@@ -86,6 +90,18 @@ model PlannedExercise {
   targetSets     Int?    @map("target_sets")
   targetReps     Int?    @map("target_reps")
   targetWeightKg Float?  @map("target_weight_kg")
+  // Rest between sets for THIS movement, in seconds. The logger's rest timer
+  // uses it; falls back to 90s when null.
+  restSeconds    Int?    @map("rest_seconds")
+  // Set style: "reps" (default when null) or "duration" for time-based work
+  // (Dead Hang, Farmer's Carry). Duration movements log a time instead of reps;
+  // weight is still optional (Farmer's Carry keeps kg).
+  setStyle       String? @map("set_style")
+  // Target hold/carry time for duration-style movements, in seconds.
+  durationSeconds Int?   @map("duration_seconds")
+  // Optional lifting tempo, e.g. "3030" or "31X1" (eccentric-pause-concentric-
+  // pause). When present the logger offers a tempo metronome.
+  tempo          String?
   supersetGroup  String? @map("superset_group") // e.g. "A", "B" — shared = superset
   notes          String?
 
@@ -103,6 +119,8 @@ model StrengthSet {
   setNo        Int     @map("set_no")
   reps         Int?
   weightKg     Float?  @map("weight_kg")
+  // Logged hold/carry time for time-based sets (null for normal rep sets).
+  durationSeconds Int? @map("duration_seconds")
   rpe          Int? // 1-10
   notes        String?
 

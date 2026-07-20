@@ -3,13 +3,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { completePlanAction } from '../../actions';
-import { HR_SOURCES } from '@/lib/constants';
+import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 
 export interface LogExercise {
   name: string;
   targetSets: number | null;
   targetReps: number | null;
   targetWeightKg: number | null;
+  restSeconds: number | null;
+  setStyle: 'reps' | 'duration';
+  durationSeconds: number | null;
+  tempo: string | null;
   superset: string | null;
   prevKg: number | null;
   prevReps: number | null;
@@ -23,37 +27,58 @@ export interface LogPlan {
   exercises: LogExercise[];
 }
 
-interface SetRow { kg: string; reps: string; rpe: string; done: boolean; prevKg: string; prevReps: string; }
-type Field = 'kg' | 'reps' | 'rpe';
+interface SetRow { kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string; }
+type Field = 'kg' | 'reps' | 'rpe' | 'dur';
 
 function initSets(ex: LogExercise): SetRow[] {
   const n = Math.max(ex.targetSets ?? 1, 1);
   const kg = ex.targetWeightKg != null ? String(ex.targetWeightKg) : ex.prevKg != null ? String(ex.prevKg) : '';
   const reps = ex.targetReps != null ? String(ex.targetReps) : '';
+  const dur = ex.setStyle === 'duration' && ex.durationSeconds != null ? String(ex.durationSeconds) : '';
   const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
   const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
-  return Array.from({ length: n }, () => ({ kg, reps, rpe: '', done: false, prevKg, prevReps }));
+  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', done: false, prevKg, prevReps }));
 }
 
-const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0–10' };
-const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10' };
+const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0–10', dur: 'TIME · SEC' };
+const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
+
+// Field cycle order depends on whether the movement is rep- or time-based.
+const fieldsForStyle = (style: 'reps' | 'duration'): Field[] =>
+  style === 'duration' ? ['kg', 'dur', 'rpe'] : ['kg', 'reps', 'rpe'];
 
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
   const [sets, setSets] = useState<SetRow[][]>(() => plan.exercises.map(initSets));
   const [active, setActive] = useState<{ ei: number; si: number; field: Field }>({ ei: 0, si: 0, field: 'kg' });
-  const [panel, setPanel] = useState<'entry' | 'rest' | 'hidden'>('entry');
-  const [rest, setRest] = useState({ running: false, remaining: 90, total: 90 });
+  const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('entry');
+  const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
+  const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s }; });
   const [elapsed, setElapsed] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Count-up stopwatch for duration-style sets.
+  const [sw, setSw] = useState({ running: false, elapsed: 0 });
+  const swElapsed = useRef(0);
+  const swTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const activeEx = plan.exercises[active.ei];
+  const activeStyle: 'reps' | 'duration' = activeEx?.setStyle === 'duration' ? 'duration' : 'reps';
+  const activeHasTempo = !!activeEx?.tempo;
 
   // session elapsed clock
   useEffect(() => {
     const t = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  useEffect(() => () => { if (restTimer.current) clearInterval(restTimer.current); }, []);
+  useEffect(() => () => {
+    if (restTimer.current) clearInterval(restTimer.current);
+    if (swTimer.current) clearInterval(swTimer.current);
+  }, []);
+  // If we switch to a movement without a tempo while the Tempo panel is open,
+  // fall back to the keypad.
+  useEffect(() => { if (panel === 'tempo' && !activeHasTempo) setPanel('entry'); }, [active.ei, activeHasTempo, panel]);
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
 
@@ -86,11 +111,34 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   function restAdjust(d: number) { setRest((r) => ({ ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) })); }
   function restToggle() {
     if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
-    else startRest(rest.remaining > 0 ? rest.remaining : 90);
+    else startRest(rest.remaining > 0 ? rest.remaining : restFor(active.ei));
   }
   function restSkip() { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
-  function tap(ei: number, si: number, field: Field) { setActive({ ei, si, field }); setPanel('entry'); }
+  // --- duration count-up ----------------------------------------------------
+  function writeField(ei: number, si: number, field: Field, value: string) {
+    setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value } : row)));
+  }
+  function durToggle() {
+    if (sw.running) {
+      if (swTimer.current) clearInterval(swTimer.current);
+      setSw({ running: false, elapsed: swElapsed.current });
+      writeField(active.ei, active.si, 'dur', String(swElapsed.current));
+    } else {
+      if (swTimer.current) clearInterval(swTimer.current);
+      swElapsed.current = 0;
+      setSw({ running: true, elapsed: 0 });
+      swTimer.current = setInterval(() => {
+        swElapsed.current += 1;
+        setSw({ running: true, elapsed: swElapsed.current });
+      }, 1000);
+    }
+  }
+
+  function tap(ei: number, si: number, field: Field) {
+    if (sw.running) { if (swTimer.current) clearInterval(swTimer.current); setSw((s) => ({ ...s, running: false })); }
+    setActive({ ei, si, field }); setPanel('entry');
+  }
   function press(v: string) {
     setSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
       if (si !== active.si) return row;
@@ -106,12 +154,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
       if (s !== si) return row; nowDone = !row.done; return { ...row, done: nowDone };
     })));
-    if (nowDone) startRest(90);
+    if (nowDone) startRest(restFor(ei));
   }
   function next() {
-    const order: Field[] = ['kg', 'reps', 'rpe'];
+    const order = fieldsForStyle(activeStyle);
     const idx = order.indexOf(active.field);
-    if (idx < 2) { setActive({ ...active, field: order[idx + 1] }); return; }
+    if (idx > -1 && idx < order.length - 1) { setActive({ ...active, field: order[idx + 1] }); return; }
     // mark done + advance
     setSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((row, s) => s === active.si ? { ...row, done: true } : row)));
     const exSets = sets[active.ei];
@@ -119,9 +167,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (active.si + 1 < exSets.length) na = { ei: active.ei, si: active.si + 1, field: 'kg' };
     else if (active.ei + 1 < sets.length) na = { ei: active.ei + 1, si: 0, field: 'kg' };
     setActive(na);
-    startRest(90);
+    startRest(restFor(active.ei));
   }
-  const addSet = (ei: number) => setSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
+  const addSet = (ei: number) => setSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
@@ -137,7 +185,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     <>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9, padding: '10px 2px', marginBottom: 4 }}>
-        <button className="icon-btn" onClick={() => router.push(`/plan/${plan.id}`)}><span className="msr">chevron_left</span></button>
+        <button className="icon-btn" onClick={() => router.push(`/plan/${plan.id}`)} aria-label="Back to session"><span className="msr" aria-hidden="true">chevron_left</span></button>
         <div style={{ flex: 1, textAlign: 'center' }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{plan.title}</div>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
@@ -159,48 +207,79 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
             {g.items.map(({ ex, index }) => {
               const activeHere = active.ei === index;
               const done = sets[index].filter((s) => s.done).length;
+              const style = ex.setStyle === 'duration' ? 'duration' : 'reps';
+              const midLabel = style === 'duration' ? 'SEC' : 'REPS';
               return (
                 <div key={index} className="card" style={{ padding: 15, marginBottom: g.items.length > 1 ? 10 : 0, borderLeft: `3px solid ${activeHere ? 'var(--accent)' : 'var(--border)'}` }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
                       <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
-                        {ex.targetSets ?? '—'} × {ex.targetReps ?? '—'} target
+                        {style === 'duration'
+                          ? `${ex.targetSets ?? '—'} × ${ex.durationSeconds != null ? `${ex.durationSeconds}s` : 'timed'} target`
+                          : `${ex.targetSets ?? '—'} × ${ex.targetReps ?? '—'} target`}
                       </div>
                     </div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
                   </div>
 
+                  {/* per-exercise rest / tempo / style pills */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+                    <span style={pillStyle}><span className="msr" style={{ fontSize: 13 }} aria-hidden="true">timer</span>Rest {mmss(ex.restSeconds ?? DEFAULT_REST_SECONDS)}</span>
+                    {ex.tempo && (
+                      <button style={{ ...pillStyle, cursor: 'pointer', color: 'var(--accent)', borderColor: 'var(--accent-line)', background: 'var(--accent-soft)' }} onClick={() => { setActive((a) => ({ ...a, ei: index, si: Math.min(a.si, sets[index].length - 1) })); setPanel('tempo'); }}>
+                        <span className="msr" style={{ fontSize: 13 }} aria-hidden="true">speed</span>Tempo {ex.tempo}
+                      </button>
+                    )}
+                    {style === 'duration' && (
+                      <span style={pillStyle}><span className="msr" style={{ fontSize: 13 }} aria-hidden="true">hourglass_top</span>Timed</span>
+                    )}
+                  </div>
+
                   {/* grid head */}
                   <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', margin: '14px 0 2px' }}>
-                    {['SET', 'PREV', 'KG', 'REPS', 'RPE'].map((h, hi) => (
+                    {['SET', 'PREV', 'KG', midLabel, 'RPE'].map((h, hi) => (
                       <div key={h} style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--text-faint)', textAlign: hi >= 2 ? 'center' : 'left' }}>{h}</div>
                     ))}
                     <div />
                   </div>
 
-                  {sets[index].map((st, si) => (
-                    <div key={si} style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, textAlign: 'center', color: st.done ? 'var(--accent)' : 'var(--text-dim)' }}>{si + 1}</div>
+                  {sets[index].map((st, si) => {
+                    const rowActive = activeHere && active.si === si;
+                    return (
+                    <div key={si} style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, textAlign: 'center', color: st.done ? 'var(--accent)' : rowActive ? 'var(--accent)' : 'var(--text-dim)' }}>{si + 1}</div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.15 }}>
                         {st.prevKg ? (
                           <>
                             <div style={{ fontSize: 11, color: 'var(--text-dim)' }}><span style={{ color: 'var(--text)', fontWeight: 600 }}>{st.prevKg}</span> kg</div>
                             <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{st.prevReps} reps</div>
                           </>
-                        ) : <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>—</div>}
+                        ) : <div style={{ fontSize: 11, color: 'var(--text-faint)' }} title="No completed history for this movement">—</div>}
                       </div>
-                      <Cell active={active.ei === index && active.si === si && active.field === 'kg'} filled={st.kg !== ''} onClick={() => tap(index, si, 'kg')} value={st.kg} />
-                      <Cell active={active.ei === index && active.si === si && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
-                      <Cell active={active.ei === index && active.si === si && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
-                      <button onClick={() => toggle(index, si)} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
-                        <span className="msr-fill">check</span>
+                      <Cell active={rowActive && active.field === 'kg'} filled={st.kg !== ''} onClick={() => tap(index, si, 'kg')} value={st.kg} />
+                      {style === 'duration' ? (
+                        <Cell active={rowActive && active.field === 'dur'} filled={st.dur !== ''} onClick={() => tap(index, si, 'dur')} value={st.dur !== '' ? `${st.dur}s` : ''} />
+                      ) : (
+                        <Cell active={rowActive && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
+                      )}
+                      <Cell active={rowActive && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
+                      <button onClick={() => toggle(index, si)} aria-label={st.done ? `Set ${si + 1} done` : `Mark set ${si + 1} done`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
+                        <span className="msr-fill" aria-hidden="true">check</span>
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
+
+                  {activeHere && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: 10.5, fontWeight: 600, letterSpacing: '0.02em', color: 'var(--accent)' }}>
+                      <span className="msr" style={{ fontSize: 14 }} aria-hidden="true">touch_app</span>
+                      Tap a cell, then use the keypad below to log
+                    </div>
+                  )}
 
                   <button onClick={() => addSet(index)} style={{ marginTop: 11, width: '100%', height: 36, borderRadius: 11, border: '1px dashed var(--border)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)', cursor: 'pointer' }}>
-                    <span className="msr">add</span>Add set
+                    <span className="msr" aria-hidden="true">add</span>Add set
                   </button>
                 </div>
               );
@@ -215,7 +294,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setPanel('entry')}>
             <div style={{ width: 34, height: 4, borderRadius: 3, background: 'var(--border)' }} />
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-faint)' }}>Tap a set to log</div>
-            <span className="msr" style={{ fontSize: 18, color: 'var(--text-faint)' }}>keyboard_arrow_up</span>
+            <span className="msr" style={{ fontSize: 18, color: 'var(--text-faint)' }} aria-hidden="true">keyboard_arrow_up</span>
           </div>
         ) : (
           <>
@@ -223,9 +302,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
               <div className="seg" style={{ flex: 1 }}>
                 <button className={`seg-item ${panel === 'entry' ? 'active' : ''}`} onClick={() => setPanel('entry')}><span className="msr">dialpad</span>Keypad</button>
                 <button className={`seg-item ${panel === 'rest' ? 'active' : ''}`} onClick={() => setPanel('rest')}><span className="msr">timer</span>Rest</button>
+                {activeHasTempo && <button className={`seg-item ${panel === 'tempo' ? 'active' : ''}`} onClick={() => setPanel('tempo')}><span className="msr">speed</span>Tempo</button>}
               </div>
-              <button onClick={() => setPanel('hidden')} style={{ width: 42, height: 38, flex: 'none', borderRadius: 11, background: 'var(--seg-track)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, border: 'none', cursor: 'pointer' }}>
-                <span className="msr">keyboard_arrow_down</span>
+              <button onClick={() => setPanel('hidden')} aria-label="Hide keypad" style={{ width: 42, height: 38, flex: 'none', borderRadius: 11, background: 'var(--seg-track)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, border: 'none', cursor: 'pointer' }}>
+                <span className="msr" aria-hidden="true">keyboard_arrow_down</span>
               </button>
             </div>
 
@@ -238,6 +318,20 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>{FIELD_UNIT[active.field]}</div>
                   </div>
                 </div>
+
+                {active.field === 'dur' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '10px 12px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                    <span className="msr-fill" style={{ fontSize: 20, color: sw.running ? 'var(--accent)' : 'var(--text-dim)' }} aria-hidden="true">timer</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--text-faint)' }}>COUNT-UP TIMER</div>
+                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>{mmss(sw.running ? sw.elapsed : (Number(activeVal) || 0))}</div>
+                    </div>
+                    <button onClick={durToggle} className="btn-sm" style={{ height: 40, minWidth: 96, background: sw.running ? 'var(--accent)' : 'var(--accent-soft)', color: sw.running ? 'var(--on-accent)' : 'var(--accent)', border: sw.running ? 'none' : '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                      <span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">{sw.running ? 'stop' : 'play_arrow'}</span>{sw.running ? 'Stop' : 'Start'}
+                    </button>
+                  </div>
+                )}
+
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                   {['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'].map((k) => (
                     <button key={k} onClick={() => press(k)} style={{ height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--key-bg)', color: 'var(--text)', fontSize: 21, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
@@ -247,7 +341,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </div>
                 <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={next}>Log set<span className="msr-fill" style={{ fontSize: 20 }}>arrow_forward</span></button>
               </>
-            ) : (
+            ) : panel === 'rest' ? (
               <div style={{ padding: '2px 2px 4px' }}>
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
                   <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>REST</div>
@@ -265,6 +359,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                   <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : 'Start rest'}
                 </button>
               </div>
+            ) : (
+              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} beep={beep} /> : null
             )}
           </>
         )}
@@ -284,14 +380,109 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 }
 
 const restSmBtn: React.CSSProperties = { flex: 1, height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--surface)', color: 'var(--text)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
+const pillStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 9px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', background: 'var(--surface)', border: '1px solid var(--border)' };
 
 function Cell({ active, filled, value, onClick }: { active: boolean; filled: boolean; value: string; onClick: () => void }) {
   const base: React.CSSProperties = { height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 11, fontSize: 16, fontWeight: 600, cursor: 'pointer' };
   let style = base;
   if (active) style = { ...base, background: 'var(--accent-soft)', border: '1.5px solid var(--accent)', color: 'var(--text)', boxShadow: '0 0 0 3px var(--accent-soft)' };
   else if (filled) style = { ...base, background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--text)' };
-  else style = { ...base, background: 'var(--last-bg)', border: '1px solid var(--border)', color: 'var(--text-faint)' };
-  return <div style={style} onClick={onClick}>{value !== '' ? value : active ? '' : '–'}</div>;
+  else style = { ...base, background: 'var(--last-bg)', border: '1px dashed var(--border)', color: 'var(--text-faint)' };
+  return <button type="button" style={style} onClick={onClick}>{value !== '' ? value : active ? '' : '–'}</button>;
+}
+
+// --- Tempo metronome ---------------------------------------------------------
+interface TempoPhase { label: string; sec: number; }
+function parseTempo(tempo: string): TempoPhase[] {
+  // Standard notation, up to 4 digits: eccentric(lower) / pause(bottom) /
+  // concentric(raise) / pause(top). "X" = explosive (treated as ~1s).
+  const labels = ['Lower', 'Bottom', 'Raise', 'Top'];
+  const out: TempoPhase[] = [];
+  tempo.toUpperCase().slice(0, 4).split('').forEach((c, i) => {
+    const sec = c === 'X' ? 1 : Number(c);
+    if (!Number.isFinite(sec) || sec <= 0) return; // skip 0-second phases
+    out.push({ label: c === 'X' && i === 2 ? 'Explode' : labels[i], sec });
+  });
+  return out;
+}
+
+function TempoPlayer({ tempo, beep }: { tempo: string; beep: () => void }) {
+  const phases = useMemo(() => parseTempo(tempo), [tempo]);
+  const initial = phases[0]?.sec ?? 0;
+  const [running, setRunning] = useState(false);
+  const [st, setSt] = useState({ pi: 0, remaining: initial, rep: 0 });
+  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
+  // Reset when the movement (tempo) changes.
+  useEffect(() => {
+    setRunning(false);
+    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+    if (timer.current) clearInterval(timer.current);
+  }, [tempo, phases]);
+  // Cue phase changes (vibrate + click) while running.
+  useEffect(() => {
+    if (!running) return;
+    try { navigator.vibrate?.(st.pi === 0 ? [70, 40, 70] : 45); } catch { /* no haptics */ }
+    beep();
+  }, [st.pi, running, beep]);
+
+  function toggle() {
+    if (running) {
+      setRunning(false);
+      if (timer.current) clearInterval(timer.current);
+    } else {
+      if (!phases.length) return;
+      setRunning(true);
+      timer.current = setInterval(() => {
+        setSt((s) => {
+          if (s.remaining > 1) return { ...s, remaining: s.remaining - 1 };
+          let np = s.pi + 1;
+          let rep = s.rep;
+          if (np >= phases.length) { np = 0; rep = s.rep + 1; }
+          return { pi: np, remaining: phases[np]?.sec ?? 0, rep };
+        });
+      }, 1000);
+    }
+  }
+  function reset() {
+    setRunning(false);
+    if (timer.current) clearInterval(timer.current);
+    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+  }
+
+  if (!phases.length) {
+    return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
+  }
+  const cur = phases[st.pi];
+
+  return (
+    <div style={{ padding: '2px 2px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
+        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>TEMPO · {tempo}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Rep {st.rep + 1}</div>
+      </div>
+      <div style={{ textAlign: 'center', margin: '8px 0 12px' }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? cur.label : 'Ready'}</div>
+        <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? st.remaining : phases[0].sec}</div>
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+        {phases.map((p, i) => (
+          <div key={i} style={{ flex: p.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === st.pi ? 'var(--accent)' : 'var(--seg-track)', color: running && i === st.pi ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.label}</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{p.sec}s</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={reset} style={restSmBtn}>Reset</button>
+        <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={toggle}>
+          <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
+        </button>
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Haptic + tone cue on each phase change</div>
+    </div>
+  );
 }
 
 interface Group { label: string | null; items: { ex: LogExercise; index: number }[]; }
@@ -309,7 +500,7 @@ function groupBySuperset(exercises: LogExercise[]): Group[] {
 // --- Finish wrap-up sheet ----------------------------------------------------
 function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
   plan: LogPlan;
-  sets: { kg: string; reps: string; rpe: string; done: boolean }[][];
+  sets: SetRow[][];
   progress: string;
   onClose: () => void;
   onSaved: () => void;
@@ -328,10 +519,11 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
   async function save() {
     setSaving(true); setError(null);
     const strengthSets = plan.exercises.flatMap((ex, ei) =>
-      sets[ei].filter((s) => s.kg || s.reps || s.rpe).map((s, i) => ({
+      sets[ei].filter((s) => s.kg || s.reps || s.rpe || s.dur).map((s, i) => ({
         exerciseName: ex.name, setNo: i + 1,
         reps: s.reps ? Number(s.reps) : null,
         weightKg: s.kg ? Number(s.kg) : null,
+        durationSeconds: s.dur ? Number(s.dur) : null,
         rpe: s.rpe ? Number(s.rpe) : null,
       })),
     );
@@ -355,7 +547,7 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
       <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, maxHeight: '88vh', overflowY: 'auto', background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTop: '1px solid var(--border)', padding: '18px 18px calc(26px + env(safe-area-inset-bottom))' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
           <div className="h2">Finish session</div>
-          <button className="icon-btn dim" onClick={onClose}><span className="msr">close</span></button>
+          <button className="icon-btn dim" onClick={onClose} aria-label="Close"><span className="msr" aria-hidden="true">close</span></button>
         </div>
         <div className="sub" style={{ marginBottom: 16 }}>{progress} sets logged</div>
 

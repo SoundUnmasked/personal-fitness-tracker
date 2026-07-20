@@ -60,6 +60,15 @@ export type DistanceSource = (typeof DISTANCE_SOURCES)[number];
 export const BODY_COMP_SOURCES = ['InBody', 'Withings'] as const;
 export type BodyCompSource = (typeof BODY_COMP_SOURCES)[number];
 
+// How a planned movement is logged. "reps" (the default) uses the kg/reps grid;
+// "duration" is time-based (Dead Hang, Farmer's Carry) — logged with a hold time
+// and a count-up timer. Weight stays optional either way.
+export const SET_STYLES = ['reps', 'duration'] as const;
+export type SetStyle = (typeof SET_STYLES)[number];
+
+/** Default rest between sets (seconds) when a movement doesn't specify one. */
+export const DEFAULT_REST_SECONDS = 90;
+
 export const SYNC_SOURCES = ['strava', 'withings'] as const;
 export type SyncSource = (typeof SYNC_SOURCES)[number];
 

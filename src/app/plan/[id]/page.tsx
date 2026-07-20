@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
 import { shortDate } from '@/lib/format';
 import CompletedView from './CompletedView';
+import StructuredBlock from '@/components/StructuredBlock';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,8 +14,16 @@ interface PreviewExercise {
   showDivider: boolean;
   scheme: string;
   weight: string | null;
+  rest: string | null;
+  tempo: string | null;
+  timed: boolean;
   last: string | null;
   note: string | null;
+}
+
+/** Seconds → "2:00" (≥1 min) or "45s". */
+function restLabel(sec: number): string {
+  return sec >= 60 ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : `${sec}s`;
 }
 interface Block {
   isSuperset: boolean;
@@ -55,11 +64,13 @@ export default async function PlannedSessionPreview({
           rpeOverall: session.rpeOverall,
           energyPre: session.energyPre,
           cooldownDone: session.cooldownDone,
+          warmup: session.warmup,
+          cooldown: session.cooldown,
           source: session.source,
           notes: session.notes,
           sets: session.strengthSets.map((s) => ({
             exerciseName: s.exerciseName, setNo: s.setNo, reps: s.reps,
-            weightKg: s.weightKg, rpe: s.rpe, notes: s.notes,
+            weightKg: s.weightKg, durationSeconds: s.durationSeconds, rpe: s.rpe, notes: s.notes,
           })),
           runs: session.runs.map((r) => ({
             distanceKm: r.distanceKm, durationMin: r.durationMin, avgPace: r.avgPace,
@@ -86,12 +97,21 @@ export default async function PlannedSessionPreview({
   const buildEx = (idx: number, badge: string, showDivider: boolean): PreviewExercise => {
     const e = exs[idx];
     const p = prev[e.exerciseName];
+    const timed = e.setStyle === 'duration';
+    const scheme = timed
+      ? (e.targetSets != null
+          ? `${e.targetSets} × ${e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed'}`
+          : e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed')
+      : fmtScheme(e.targetSets, e.targetReps);
     return {
       name: e.exerciseName,
       badge,
       showDivider,
-      scheme: fmtScheme(e.targetSets, e.targetReps),
+      scheme,
       weight: e.targetWeightKg != null ? `${e.targetWeightKg} kg` : null,
+      rest: e.restSeconds != null ? restLabel(e.restSeconds) : null,
+      tempo: e.tempo,
+      timed,
       last: p ? `${p.weightKg != null ? `${p.weightKg} kg` : '—'}${p.reps != null ? ` × ${p.reps}` : ''}` : null,
       note: e.notes,
     };
@@ -147,6 +167,9 @@ export default async function PlannedSessionPreview({
         <TotalTile icon="repeat" value={totalSets ? String(totalSets) : '—'} label="planned sets" />
       </div>
 
+      {/* Structured warm-up (own collapsible block) */}
+      {session.warmup && <StructuredBlock kind="warmup" text={session.warmup} />}
+
       {/* Plan */}
       <div className="section-head">
         <div className="h2">The plan</div>
@@ -180,9 +203,12 @@ export default async function PlannedSessionPreview({
                           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
                           <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', whiteSpace: 'nowrap' }}>{ex.scheme}</div>
                         </div>
-                        {ex.weight && (
+                        {(ex.weight || ex.rest || ex.tempo || ex.timed) && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
-                            <div className="chip" style={{ cursor: 'default' }}><span className="msr">fitness_center</span>{ex.weight}</div>
+                            {ex.weight && <div className="chip" style={{ cursor: 'default' }}><span className="msr">fitness_center</span>{ex.weight}</div>}
+                            {ex.timed && <div className="chip" style={{ cursor: 'default' }}><span className="msr">hourglass_top</span>Timed</div>}
+                            {ex.rest && <div className="chip" style={{ cursor: 'default' }}><span className="msr">timer</span>Rest {ex.rest}</div>}
+                            {ex.tempo && <div className="chip" style={{ cursor: 'default' }}><span className="msr">speed</span>Tempo {ex.tempo}</div>}
                           </div>
                         )}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 11, padding: '8px 10px', borderRadius: 10, background: 'var(--last-bg)' }}>
@@ -206,6 +232,9 @@ export default async function PlannedSessionPreview({
           ))}
         </div>
       )}
+
+      {/* Structured cool-down (own collapsible block) */}
+      {session.cooldown && <StructuredBlock kind="cooldown" text={session.cooldown} />}
 
       <div style={{ height: 92 }} />
       {/* Fixed footer CTA */}

@@ -3,7 +3,13 @@
 // hook, and unit-tested without a database.
 
 import type { PrismaClient, Prisma } from '@prisma/client';
-import { SESSION_TYPES, DEFAULT_LOCATION, type SessionType } from './constants';
+import {
+  SESSION_TYPES,
+  DEFAULT_LOCATION,
+  SET_STYLES,
+  type SessionType,
+  type SetStyle,
+} from './constants';
 
 // ---------------------------------------------------------------------------
 // The JSON contract for a planned session (also documented in the README).
@@ -13,6 +19,10 @@ export interface PlannedExerciseInput {
   sets?: number | null; // target number of sets
   reps?: number | null; // target reps per set
   weightKg?: number | null; // target working weight
+  restSeconds?: number | null; // rest between sets (logger falls back to 90s)
+  setStyle?: SetStyle | null; // "reps" (default) | "duration" (time-based)
+  durationSeconds?: number | null; // target hold/carry time for duration style
+  tempo?: string | null; // lifting tempo, e.g. "3030" / "31X1"
   superset?: string | null; // group tag — movements sharing a tag are a superset
   notes?: string | null;
 }
@@ -23,6 +33,8 @@ export interface PlannedSessionInput {
   title?: string | null;
   location?: string | null;
   notes?: string | null;
+  warmup?: string | null; // structured warm-up text
+  cooldown?: string | null; // structured cool-down text
   exercises: PlannedExerciseInput[];
 }
 
@@ -62,11 +74,19 @@ export function validatePlannedSession(body: unknown): ValidationResult {
     if (!name) {
       return { ok: false, error: `exercises[${i}].name is required.` };
     }
+    const durationSeconds = nonNegIntOrNull(e.durationSeconds);
+    // If a duration target is given but no explicit style, treat it as duration.
+    const setStyle =
+      setStyleOrNull(e.setStyle) ?? (durationSeconds != null ? 'duration' : null);
     exercises.push({
       name,
       sets: intOrNull(e.sets),
       reps: intOrNull(e.reps),
       weightKg: floatOrNull(e.weightKg),
+      restSeconds: nonNegIntOrNull(e.restSeconds),
+      setStyle,
+      durationSeconds,
+      tempo: tempoOrNull(e.tempo),
       superset: strOrNull(e.superset),
       notes: strOrNull(e.notes),
     });
@@ -83,6 +103,8 @@ export function validatePlannedSession(body: unknown): ValidationResult {
       title: strOrNull(b.title),
       location: strOrNull(b.location),
       notes: strOrNull(b.notes),
+      warmup: strOrNull(b.warmup),
+      cooldown: strOrNull(b.cooldown),
       exercises,
     },
   };
@@ -102,6 +124,8 @@ export async function createPlannedSession(
       title: input.title ?? null,
       location: input.location ?? DEFAULT_LOCATION,
       notes: input.notes ?? null,
+      warmup: input.warmup ?? null,
+      cooldown: input.cooldown ?? null,
       source,
       plannedExercises: {
         create: input.exercises.map((e, i) => ({
@@ -110,6 +134,10 @@ export async function createPlannedSession(
           targetSets: e.sets ?? null,
           targetReps: e.reps ?? null,
           targetWeightKg: e.weightKg ?? null,
+          restSeconds: e.restSeconds ?? null,
+          setStyle: e.setStyle ?? null,
+          durationSeconds: e.durationSeconds ?? null,
+          tempo: e.tempo ?? null,
           supersetGroup: e.superset ?? null,
           notes: e.notes ?? null,
         })),
@@ -185,6 +213,7 @@ export interface ActualSetInput {
   setNo?: number;
   reps?: number | null;
   weightKg?: number | null;
+  durationSeconds?: number | null; // logged time for duration-style sets
   rpe?: number | null;
   notes?: string | null;
 }
@@ -221,6 +250,23 @@ export function floatOrNull(v: unknown): number | null {
 }
 export function strOrNull(v: unknown): string | null {
   return typeof v === 'string' && v.trim() !== '' ? v.trim() : null;
+}
+/** Like intOrNull but clamps negatives to null (seconds are never negative). */
+export function nonNegIntOrNull(v: unknown): number | null {
+  const n = intOrNull(v);
+  return n != null && n >= 0 ? n : null;
+}
+/** Canonical set style ("reps" | "duration"), else null. */
+export function setStyleOrNull(v: unknown): SetStyle | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toLowerCase();
+  return (SET_STYLES as readonly string[]).includes(s) ? (s as SetStyle) : null;
+}
+/** Tempo like "3030" / "31X1" (2–4 chars, digits or X); else null. */
+export function tempoOrNull(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim().toUpperCase();
+  return /^[0-9X]{2,4}$/.test(s) ? s : null;
 }
 
 export type SessionWithChildren = Prisma.SessionGetPayload<{
