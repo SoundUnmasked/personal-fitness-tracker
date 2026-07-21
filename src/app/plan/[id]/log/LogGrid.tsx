@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { completePlanAction, setSessionFlagsAction } from '../../actions';
+import { completePlanAction, discardSessionAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
+import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
   readDraft as readSessionDraft,
@@ -91,14 +92,12 @@ export interface LogPlan {
   title: string;
   hasRun: boolean;
   needsCooldown: boolean;
-  warmup: string | null;
-  cooldown: string | null;
-  warmupDone: boolean;
-  cooldownDone: boolean;
+  warmup: FlowItem[];   // structured warm-up items (item 5)
+  cooldown: FlowItem[];  // structured cool-down items
   exercises: LogExercise[];
 }
 
-interface SetRow { kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string; }
+interface SetRow { kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; }
 type Field = 'kg' | 'reps' | 'rpe' | 'dur';
 
 function initSets(ex: LogExercise): SetRow[] {
@@ -108,8 +107,16 @@ function initSets(ex: LogExercise): SetRow[] {
   const dur = ex.setStyle === 'duration' && ex.durationSeconds != null ? String(ex.durationSeconds) : '';
   const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
   const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
-  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', done: false, prevKg, prevReps }));
+  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', done: false, prevKg, prevReps, warmup: false }));
 }
+const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '', warmup });
+// Working-set number for a row = count of non-warmup rows up to and including it.
+function workingNo(rows: SetRow[], si: number): number {
+  let n = 0;
+  for (let i = 0; i <= si; i++) if (!rows[i].warmup) n++;
+  return n;
+}
+function workingCount(rows: SetRow[]): number { return rows.filter((r) => !r.warmup).length; }
 
 const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0–10', dur: 'TIME · SEC' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
@@ -127,14 +134,15 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // Item 3: no keypad on open — the panel starts hidden and only reveals the
   // keypad once the user taps a cell (tap() sets it to 'entry').
   const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('hidden');
-  const [resumed, setResumed] = useState(false);
-  const [paused, setPaused] = useState(false);
-  const [continueMode, setContinueMode] = useState(false); // paused because backed-out → "Continue"
+  const [resumeToast, setResumeToast] = useState(false); // brief "Resumed" confirmation
+  const [paused, setPaused] = useState(false);           // explicit in-session pause overlay
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);       // back-out choices sheet (item 3)
   const [editEx, setEditEx] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ ei: number; si: number } | null>(null);
-  const [warmupDone, setWarmupDone] = useState(plan.warmupDone);
-  const [cooldownDone, setCooldownDone] = useState(plan.cooldownDone);
+  const [warmup, setWarmup] = useState<FlowItem[]>(() => plan.warmup.map((i) => ({ ...i })));
+  const [cooldown, setCooldown] = useState<FlowItem[]>(() => plan.cooldown.map((i) => ({ ...i })));
   const [notifyAsk, setNotifyAsk] = useState(false);
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
@@ -161,13 +169,20 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const activeRef = useRef(active); useEffect(() => { activeRef.current = active; }, [active]);
   const elapsedRef = useRef(elapsed); useEffect(() => { elapsedRef.current = elapsed; }, [elapsed]);
   const pausedRef = useRef(paused); useEffect(() => { pausedRef.current = paused; }, [paused]);
+  const warmupRef = useRef(warmup); useEffect(() => { warmupRef.current = warmup; }, [warmup]);
+  const cooldownRef = useRef(cooldown); useEffect(() => { cooldownRef.current = cooldown; }, [cooldown]);
   const clearedRef = useRef(false); // set once the draft is intentionally cleared (finish)
+  // Disposition for the NEXT nav-away save: null → default (implicitly pause),
+  // false → keep running (item 3 "Keep session running"). Reset after each use.
+  const exitPausedRef = useRef<boolean | null>(null);
 
   const buildDraft = useCallback((overrideSets?: SetRow[][], overridePaused?: boolean): SessionDraft => ({
     v: 2,
     sessionId: plan.id,
     title: plan.title,
     sets: overrideSets ?? setsRef.current,
+    warmup: warmupRef.current,
+    cooldown: cooldownRef.current,
     active: activeRef.current,
     elapsed: elapsedRef.current,
     paused: overridePaused ?? pausedRef.current,
@@ -178,18 +193,27 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const updateSets = useCallback((updater: (prev: SetRow[][]) => SetRow[][]) => {
     setSets((prev) => { const next = updater(prev); saveSessionDraft(buildDraft(next)); return next; });
   }, [buildDraft]);
+  const saveNow = useCallback(() => { saveSessionDraft(buildDraft()); }, [buildDraft]);
 
-  // Hydrate a saved draft once, on mount → restore sets + active + elapsed, and
-  // if it was backed-out (paused) show the "Continue session" state.
+  // Hydrate a saved draft once, on mount → restore everything. Item 4b: if it
+  // was implicitly paused (backed-out / "save & come back"), RESUME on entry
+  // and show a brief "Resumed" toast rather than a pause interstitial.
   useEffect(() => {
     requestPersistentStorage();
     const d = readSessionDraft(plan.id);
     if (d && Array.isArray(d.sets) && d.sets.length) {
-      setSets(d.sets);
+      setSets(d.sets.map((rows) => rows.map((r) => ({ ...emptyRow(), ...r }))));
       if (d.active) setActive(d.active);
       if (typeof d.elapsed === 'number') setElapsed(d.elapsed);
-      setResumed(true);
-      if (d.paused) { setPaused(true); setContinueMode(true); }
+      if (Array.isArray(d.warmup)) setWarmup(d.warmup);
+      if (Array.isArray(d.cooldown)) setCooldown(d.cooldown);
+      // Auto-resume (never open into a paused interstitial). Only flash the
+      // "Resumed" confirmation when the draft had been implicitly paused
+      // (backed-out / "save & come back") — item 4b.
+      if (d.paused) {
+        setResumeToast(true);
+        setTimeout(() => setResumeToast(false), 2600);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan.id]);
@@ -198,14 +222,14 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // on mobile). visibilitychange/pagehide cover backgrounding & tab discard;
   // the unmount cleanup covers in-app client-side navigation (the back button).
   useEffect(() => {
-    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); };
-    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); };
+    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); };
+    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); };
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', onPageHide);
-      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); // client-side nav away
+      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); // client-side nav away
     };
   }, [buildDraft]);
 
@@ -352,7 +376,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     saveSessionDraft(buildDraft(undefined, true));
   }
   function resumeSession() {
-    setPaused(false); setContinueMode(false);
+    setPaused(false);
     if (restWasRunning.current) { setRest((r) => ({ ...r, running: true })); runRestInterval(); }
     if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
     saveSessionDraft(buildDraft(undefined, false));
@@ -368,13 +392,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; }
     swElapsed.current = 0; setSw({ running: false, elapsed: 0 });
     setElapsed(0);
-    setResumed(false);
     setEditEx(null);
     setPanel('hidden');
     setConfirmRestart(false);
-    setPaused(false); setContinueMode(false);
+    setPaused(false);
     // Session continues (still in progress), just cleared — keep a fresh draft.
-    saveSessionDraft({ v: 2, sessionId: plan.id, title: plan.title, sets: fresh, active: { ei: 0, si: 0, field: 'kg' }, elapsed: 0, paused: false, updatedAt: Date.now() });
+    saveSessionDraft({ v: 2, sessionId: plan.id, title: plan.title, sets: fresh, warmup: warmupRef.current, cooldown: cooldownRef.current, active: { ei: 0, si: 0, field: 'kg' }, elapsed: 0, paused: false, updatedAt: Date.now() });
   }
 
   // --- duration count-up ----------------------------------------------------
@@ -436,7 +459,42 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setActive(na);
     startRest(restFor(active.ei));
   }
-  const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
+  const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, emptyRow(false)] : rows));
+
+  // Item 6: warm-up (ramp-up) sets sit ABOVE set 1 and never consume a working
+  // set number. Keep them physically leading in the row array so array order ==
+  // visual order and workingNo()/workingCount() stay correct.
+  function reorderWarmupFirst(rows: SetRow[]): SetRow[] {
+    return [...rows.filter((r) => r.warmup), ...rows.filter((r) => !r.warmup)];
+  }
+  const addWarmupSet = (ei: number) => {
+    const warmCount = (sets[ei] ?? []).filter((r) => r.warmup).length;
+    updateSets((all) => all.map((rows, e) => {
+      if (e !== ei) return rows;
+      return [...rows.slice(0, warmCount), emptyRow(true), ...rows.slice(warmCount)];
+    }));
+    // The insert lands at `warmCount`; shift the active pointer so it keeps
+    // pointing at the SAME working set the user was logging (item 6: adding a
+    // warm-up row above set 1 must not renumber or hijack focus from set 1).
+    setActive((a) => (a.ei === ei && a.si >= warmCount) ? { ...a, si: a.si + 1 } : a);
+  };
+  function toggleRowWarmup(ei: number, si: number) {
+    updateSets((all) => all.map((rows, e) => {
+      if (e !== ei) return rows;
+      return reorderWarmupFirst(rows.map((r, s) => s === si ? { ...r, warmup: !r.warmup } : r));
+    }));
+    // Reordering can shift indices — keep the active pointer in range.
+    setActive((a) => a.ei !== ei ? a : { ...a, si: Math.min(a.si, (sets[ei]?.length ?? 1) - 1) });
+  }
+
+  // Item 5: warm-up / cool-down item ticks + logged weights, persisted live via
+  // the draft store (no server round-trip until finish).
+  const patchWarmup = useCallback((i: number, patch: Partial<FlowItem>) => {
+    setWarmup((prev) => { const next = prev.map((it, idx) => idx === i ? { ...it, ...patch } : it); warmupRef.current = next; saveSessionDraft(buildDraft()); return next; });
+  }, [buildDraft]);
+  const patchCooldown = useCallback((i: number, patch: Partial<FlowItem>) => {
+    setCooldown((prev) => { const next = prev.map((it, idx) => idx === i ? { ...it, ...patch } : it); cooldownRef.current = next; saveSessionDraft(buildDraft()); return next; });
+  }, [buildDraft]);
 
   function deleteSet(ei: number, si: number) {
     const preLen = sets[ei]?.length ?? 0;
@@ -462,14 +520,45 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
 
   function finishNow() { clearedRef.current = true; clearSessionDraft(plan.id); releaseWake(); cancelRestNotification(); router.push('/'); }
-  function toggleWarmup() { const v = !warmupDone; setWarmupDone(v); setSessionFlagsAction(plan.id, { warmupDone: v }); }
-  function toggleCooldown() { const v = !cooldownDone; setCooldownDone(v); setSessionFlagsAction(plan.id, { cooldownDone: v }); }
+
+  // --- back-out sheet actions (item 3) --------------------------------------
+  function keepRunning() {
+    // Leave the session running (timers keep ticking conceptually; mini-bar
+    // shows it as live). Save NOT paused, then navigate away.
+    exitPausedRef.current = false;
+    saveSessionDraft(buildDraft(undefined, false));
+    setExitOpen(false);
+    router.push(`/plan/${plan.id}`);
+  }
+  function saveAndComeBack() {
+    // Implicitly pause (freeze timers), save a paused draft, leave. Mini-bar
+    // stays visible; re-entry auto-resumes with a "Resumed" flash.
+    exitPausedRef.current = true;
+    pauseSession();
+    setExitOpen(false);
+    router.push(`/plan/${plan.id}`);
+  }
+  function endSaveFinish() { setExitOpen(false); setFinishing(true); }
+  async function endDiscard() {
+    clearedRef.current = true;
+    clearSessionDraft(plan.id);
+    releaseWake();
+    cancelRestNotification();
+    setExitOpen(false);
+    await discardSessionAction(plan.id);
+    router.push(`/plan/${plan.id}`);
+  }
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
-  const activeLen = sets[active.ei]?.length ?? 0;
+  const activeRows = sets[active.ei] ?? [];
+  const activeRow = activeRows[active.si];
+  const activeIsWarmup = !!activeRow?.warmup;
+  const activeSetLabel = activeIsWarmup
+    ? 'WARM-UP SET'
+    : `SET ${workingNo(activeRows, active.si)} OF ${workingCount(activeRows)}`;
 
   const cols = '30px 56px 1fr 1fr 1fr 44px';
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
@@ -478,7 +567,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     <>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4 }}>
-        <button className="icon-btn" onClick={() => router.push(`/plan/${plan.id}`)} aria-label="Back to session"><span className="msr" aria-hidden="true">chevron_left</span></button>
+        <button className="icon-btn" onClick={() => setExitOpen(true)} aria-label="Back out of session"><span className="msr" aria-hidden="true">chevron_left</span></button>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
@@ -489,22 +578,22 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>Finish</button>
       </div>
 
-      {resumed && !paused && (
-        <div className="note note-accent" style={{ marginBottom: 10 }}>
+      {resumeToast && (
+        <div className="note note-accent" style={{ marginBottom: 10 }} role="status">
           <span className="msr-fill" aria-hidden="true">restore</span>
-          Continuing your session — logged sets restored, saved as you go.
+          Resumed — logged sets restored, saved as you go.
         </div>
       )}
 
-      {plan.warmup && <FlowBlock kind="warmup" text={plan.warmup} done={warmupDone} onToggle={toggleWarmup} />}
+      {warmup.length > 0 && <WarmCoolList kind="warmup" items={warmup} onPatch={patchWarmup} />}
 
       {/* Exercise cards */}
-      <div className="stack stack-12" style={{ paddingBottom: 360, marginTop: plan.warmup ? 12 : 0 }}>
+      <div className="stack stack-12" style={{ paddingBottom: 360, marginTop: warmup.length > 0 ? 12 : 0 }}>
         {groups.map((g, gi) => (
           <div key={gi}>
             {g.label && (
               <div className="eyebrow eyebrow-accent" style={{ margin: '0 2px 8px', fontSize: 10.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />SUPERSET {g.label}
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />SUPERSET {supersetLabel(groups, gi)}
               </div>
             )}
             {g.items.map(({ ex, index }) => {
@@ -557,13 +646,24 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
                   {sets[index].map((st, si) => {
                     const rowActive = activeHere && active.si === si;
+                    const wNo = workingNo(sets[index], si);
+                    const badgeBg = st.done ? 'var(--accent)' : st.warmup ? 'transparent' : rowActive ? 'var(--accent-soft)' : 'transparent';
+                    const badgeColor = st.done ? 'var(--on-accent)' : st.warmup ? 'var(--text-faint)' : rowActive ? 'var(--accent)' : 'var(--text)';
                     return (
                     <div key={si}
                       onTouchStart={(e) => rowTouchStart(e, index, si)}
                       onTouchEnd={rowTouchEnd}
-                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
+                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: st.done ? 'var(--on-accent)' : rowActive ? 'var(--accent)' : 'var(--text)', background: st.done ? 'var(--accent)' : rowActive ? 'var(--accent-soft)' : 'transparent' }}>{si + 1}</div>
+                        {editing ? (
+                          <button onClick={() => toggleRowWarmup(index, si)} aria-label={st.warmup ? `Make set ${wNo} a working set` : 'Mark as warm-up set'} aria-pressed={st.warmup} style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 13 : 16, fontWeight: 800, cursor: 'pointer', border: st.warmup ? '1px solid var(--accent-line)' : '1px dashed var(--border)', background: st.warmup ? 'var(--accent-soft)' : 'transparent', color: st.warmup ? 'var(--accent)' : 'var(--text-dim)' }}>
+                            {st.warmup ? <span className="msr" style={{ fontSize: 15 }} aria-hidden="true">whatshot</span> : wNo}
+                          </button>
+                        ) : (
+                          <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 13 : 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: badgeColor, background: badgeBg }}>
+                            {st.warmup ? <span className="msr-fill" style={{ fontSize: 15, color: 'var(--accent)' }} aria-hidden="true">whatshot</span> : wNo}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.15 }}>
                         {st.prevKg ? (
@@ -581,11 +681,11 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       )}
                       <Cell active={rowActive && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
                       {editing ? (
-                        <button onClick={() => setDeleteTarget({ ei: index, si })} aria-label={`Delete set ${si + 1}`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, cursor: 'pointer', background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>
+                        <button onClick={() => setDeleteTarget({ ei: index, si })} aria-label={st.warmup ? 'Delete warm-up set' : `Delete set ${wNo}`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, cursor: 'pointer', background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>
                           <span className="msr" aria-hidden="true">delete</span>
                         </button>
                       ) : (
-                        <button onClick={() => toggle(index, si)} aria-label={st.done ? `Set ${si + 1} done` : `Mark set ${si + 1} done`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
+                        <button onClick={() => toggle(index, si)} aria-label={`${st.done ? '' : 'Mark '}${st.warmup ? 'warm-up set' : `set ${wNo}`} done`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
                           <span className="msr-fill" aria-hidden="true">check</span>
                         </button>
                       )}
@@ -595,7 +695,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
                   {activeHere && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: '0.03em', color: 'var(--accent)' }}>SET {active.si + 1} OF {activeLen}</div>
+                      <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: '0.03em', color: 'var(--accent)' }}>{activeSetLabel}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-faint)' }}>
                         <span className="msr" style={{ fontSize: 13 }} aria-hidden="true">touch_app</span>
                         tap a cell, then use the keypad below
@@ -604,18 +704,21 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                   )}
 
                   <div style={{ display: 'flex', gap: 8, marginTop: 11, alignItems: 'center' }}>
+                    <button onClick={() => addWarmupSet(index)} aria-label="Add warm-up set" style={{ height: 36, padding: '0 12px', borderRadius: 11, border: '1px dashed var(--accent-line)', background: 'var(--accent-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: 12, fontWeight: 700, color: 'var(--accent)', cursor: 'pointer', flex: 'none' }}>
+                      <span className="msr" style={{ fontSize: 16 }} aria-hidden="true">whatshot</span>Warm-up
+                    </button>
                     <button onClick={() => addSet(index)} style={{ flex: 1, height: 36, borderRadius: 11, border: '1px dashed var(--border)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)', cursor: 'pointer' }}>
                       <span className="msr" aria-hidden="true">add</span>Add set
                     </button>
-                    {editing && <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>Tap <span className="msr" style={{ fontSize: 12, verticalAlign: 'middle' }} aria-hidden="true">delete</span> to remove a set</div>}
                   </div>
+                  {editing && <div style={{ fontSize: 10.5, color: 'var(--text-faint)', marginTop: 8 }}>Tap a set number to mark it a warm-up set · tap <span className="msr" style={{ fontSize: 12, verticalAlign: 'middle' }} aria-hidden="true">delete</span> to remove a set</div>}
                 </div>
               );
             })}
           </div>
         ))}
 
-        {plan.cooldown && <FlowBlock kind="cooldown" text={plan.cooldown} done={cooldownDone} onToggle={toggleCooldown} />}
+        {cooldown.length > 0 && <WarmCoolList kind="cooldown" items={cooldown} onPatch={patchCooldown} />}
       </div>
 
       {/* Bottom entry panel */}
@@ -654,7 +757,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
             {panel === 'entry' ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11, padding: '0 2px' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>SET {active.si + 1} OF {activeLen} · {FIELD_LABEL[active.field]}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{activeSetLabel} · {FIELD_LABEL[active.field]}</div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
                     <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>{activeVal === '' ? '0' : activeVal}</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>{FIELD_UNIT[active.field]}</div>
@@ -711,10 +814,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       {/* Paused / Continue overlay (items 4/5) */}
       {paused && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>{continueMode ? 'SESSION IN PROGRESS' : 'PAUSED'}</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>PAUSED</div>
           <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{mmss(elapsed)}</div>
           <div style={{ fontSize: 12.5, color: 'var(--text-dim)', textAlign: 'center', maxWidth: 260 }}>{doneCount} of {totalCount} sets logged · saved automatically</div>
-          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>{continueMode ? 'Continue session' : 'Resume session'}</button>
+          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>Resume session</button>
           <button onClick={() => setConfirmRestart(true)} style={{ ...restSmBtn, maxWidth: 300, width: '100%', flex: 'none', height: 48, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>Restart — clear progress</button>
         </div>
       )}
@@ -747,9 +850,23 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         <FinishSheet
           plan={plan}
           sets={sets}
+          warmup={warmup}
+          cooldown={cooldown}
           progress={`${doneCount}/${totalCount}`}
           onClose={() => setFinishing(false)}
           onSaved={finishNow}
+        />
+      )}
+
+      {exitOpen && (
+        <ExitSheet
+          elapsed={mmss(elapsed)}
+          progress={`${doneCount} of ${totalCount}`}
+          onClose={() => setExitOpen(false)}
+          onKeepRunning={keepRunning}
+          onSaveLater={saveAndComeBack}
+          onSaveFinish={endSaveFinish}
+          onDiscard={endDiscard}
         />
       )}
     </>
@@ -788,27 +905,127 @@ function ConfirmDialog({ icon, title, body, confirmLabel, danger, onCancel, onCo
   );
 }
 
-function FlowBlock({ kind, text, done, onToggle }: { kind: 'warmup' | 'cooldown'; text: string; done: boolean; onToggle: () => void }) {
+// --- Structured warm-up / cool-down list (item 5) ----------------------------
+// Condensed collapsible list: one tickable line per item; weighted items get a
+// compact weight input. Ticks + weights are pushed straight to the draft store
+// via onPatch, so they persist immediately.
+function WarmCoolList({ kind, items, onPatch }: {
+  kind: 'warmup' | 'cooldown';
+  items: FlowItem[];
+  onPatch: (i: number, patch: Partial<FlowItem>) => void;
+}) {
   const [open, setOpen] = useState(true);
   const isWarm = kind === 'warmup';
+  const doneCount = items.filter((i) => i.done).length;
   return (
-    <div className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${done ? 'var(--accent)' : 'var(--border)'}` }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px' }}>
-        <button onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, color: 'var(--text)' }}>
-          <span className="msr-fill" style={{ fontSize: 19, color: 'var(--accent)' }} aria-hidden="true">{isWarm ? 'local_fire_department' : 'self_improvement'}</span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700 }}>{isWarm ? 'Warm-up' : 'Cool-down'}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{done ? 'Done' : isWarm ? 'Before you start' : 'After the work'}</div>
-          </div>
-          <span className="msr" style={{ fontSize: 20, color: 'var(--text-faint)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} aria-hidden="true">expand_more</span>
-        </button>
-        <button onClick={onToggle} aria-label={done ? `Mark ${kind} not done` : `Mark ${kind} done`} aria-pressed={done} style={{ width: 40, height: 40, flex: 'none', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: done ? 'var(--accent)' : 'transparent', color: done ? 'var(--on-accent)' : 'var(--text-faint)', border: done ? 'none' : '1.5px solid var(--border)' }}>
-          <span className="msr-fill" aria-hidden="true">check</span>
-        </button>
-      </div>
+    <div className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${doneCount === items.length && items.length ? 'var(--accent)' : 'var(--border)'}` }}>
+      <button onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', minWidth: 0, background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: '12px 14px', color: 'var(--text)' }}>
+        <span className="msr-fill" style={{ fontSize: 19, color: 'var(--accent)' }} aria-hidden="true">{isWarm ? 'local_fire_department' : 'self_improvement'}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>{isWarm ? 'Warm-up' : 'Cool-down'}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{doneCount}/{items.length} done · {isWarm ? 'before you start' : 'after the work'}</div>
+        </div>
+        <span className="msr" style={{ fontSize: 20, color: 'var(--text-faint)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} aria-hidden="true">expand_more</span>
+      </button>
       {open && (
-        <div style={{ padding: '0 14px 13px', fontSize: 13, lineHeight: 1.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{text}</div>
+        <div style={{ padding: '0 12px 10px' }}>
+          {items.map((it, i) => {
+            const weighted = it.weightKg != null || it.loggedWeightKg != null;
+            return (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 2px', borderTop: '1px solid var(--border)' }}>
+                <button
+                  onClick={() => onPatch(i, { done: !it.done })}
+                  aria-label={it.done ? `Mark ${it.name} not done` : `Mark ${it.name} done`}
+                  aria-pressed={it.done}
+                  style={{ width: 30, height: 30, flex: 'none', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, cursor: 'pointer', background: it.done ? 'var(--accent)' : 'transparent', color: it.done ? 'var(--on-accent)' : 'var(--text-faint)', border: it.done ? 'none' : '1.5px solid var(--border)' }}
+                >
+                  <span className="msr-fill" aria-hidden="true">check</span>
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--text)', textDecoration: it.done ? 'line-through' : 'none', textDecorationColor: 'var(--text-faint)' }}>{it.name}</div>
+                  {it.detail && <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{it.detail}</div>}
+                </div>
+                {weighted && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none' }}>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      value={it.loggedWeightKg ?? ''}
+                      placeholder={it.weightKg != null ? String(it.weightKg) : '—'}
+                      onChange={(e) => { const v = e.target.value; onPatch(i, { loggedWeightKg: v === '' ? null : Number(v) }); }}
+                      aria-label={`${it.name} weight in kg`}
+                      style={{ width: 58, height: 34, textAlign: 'center', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 14, fontWeight: 600 }}
+                    />
+                    <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>kg</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
+    </div>
+  );
+}
+
+// --- Back-out sheet (item 3) --------------------------------------------------
+// Three top-level choices; "End session" reveals two sub-choices, and Discard
+// sits behind an explicit warning.
+function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onSaveFinish, onDiscard }: {
+  elapsed: string;
+  progress: string;
+  onClose: () => void;
+  onKeepRunning: () => void;
+  onSaveLater: () => void;
+  onSaveFinish: () => void;
+  onDiscard: () => void;
+}) {
+  const [view, setView] = useState<'main' | 'end' | 'discard'>('main');
+  const Choice = ({ icon, title, body, onClick, danger }: { icon: string; title: string; body: string; onClick: () => void; danger?: boolean }) => (
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '13px 14px', borderRadius: 14, border: `1px solid ${danger ? 'var(--err-line)' : 'var(--border)'}`, background: danger ? 'var(--err-tint)' : 'var(--surface)', cursor: 'pointer', color: danger ? 'var(--err-text)' : 'var(--text)' }}>
+      <span className="msr-fill" style={{ fontSize: 22, color: danger ? 'var(--err-text)' : 'var(--accent)', flex: 'none' }} aria-hidden="true">{icon}</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 11.5, color: danger ? 'var(--err-text)' : 'var(--text-faint)', marginTop: 1, lineHeight: 1.35 }}>{body}</div>
+      </div>
+    </button>
+  );
+  return (
+    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 75, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTop: '1px solid var(--border)', padding: '18px 18px calc(26px + env(safe-area-inset-bottom))' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+          <div className="h2">{view === 'discard' ? 'Discard session?' : view === 'end' ? 'End session' : 'Leave session?'}</div>
+          <button className="icon-btn dim" onClick={onClose} aria-label="Close"><span className="msr" aria-hidden="true">close</span></button>
+        </div>
+        <div className="sub" style={{ marginBottom: 16 }}>{elapsed} elapsed · {progress} sets logged</div>
+
+        {view === 'main' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Choice icon="play_circle" title="Keep session running" body="Timers keep running. A bar keeps this session one tap away." onClick={onKeepRunning} />
+            <Choice icon="bookmark" title="Save and come back later" body="Pauses and saves your progress. Resume any time from the session bar." onClick={onSaveLater} />
+            <Choice icon="stop_circle" title="End session" body="Finish and save, or discard this attempt." onClick={() => setView('end')} />
+          </div>
+        )}
+
+        {view === 'end' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Choice icon="check_circle" title="Save and finish" body="Keeps every logged set and marks the session complete." onClick={onSaveFinish} />
+            <Choice icon="delete" title="Discard session" body="Throws away this attempt and returns the session to planned." danger onClick={() => setView('discard')} />
+            <button onClick={() => setView('main')} style={{ ...restSmBtn, height: 46, marginTop: 2 }}>Back</button>
+          </div>
+        )}
+
+        {view === 'discard' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="note note-err" style={{ marginBottom: 2 }}>
+              <span className="msr-fill" aria-hidden="true">warning</span>
+              This clears every set logged in this session and returns it to planned. This can&apos;t be undone.
+            </div>
+            <button onClick={onDiscard} style={{ ...restSmBtn, height: 50, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)', fontWeight: 700 }}>Discard &amp; return to planned</button>
+            <button onClick={() => setView('end')} style={{ ...restSmBtn, height: 46 }}>Keep my progress</button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -940,10 +1157,20 @@ function groupBySuperset(exercises: LogExercise[]): Group[] {
   return groups;
 }
 
+// Item 2: superset header label derived purely from ON-SCREEN position — the
+// block's 1-based number plus a letter per exercise (e.g. "6A / 6B"). Never
+// echoes the pushed plan's raw tag, which may not match the rendered list.
+function supersetLabel(groups: Group[], gi: number): string {
+  const num = gi + 1;
+  return groups[gi].items.map((_, i) => `${num}${String.fromCharCode(65 + i)}`).join(' / ');
+}
+
 // --- Finish wrap-up sheet ----------------------------------------------------
-function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
+function FinishSheet({ plan, sets, warmup, cooldown, progress, onClose, onSaved }: {
   plan: LogPlan;
   sets: SetRow[][];
+  warmup: FlowItem[];
+  cooldown: FlowItem[];
   progress: string;
   onClose: () => void;
   onSaved: () => void;
@@ -959,19 +1186,25 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
-  const showCooldownPrompt = plan.needsCooldown && !plan.cooldown;
+  const showCooldownPrompt = plan.needsCooldown && cooldown.length === 0;
 
   async function save() {
     setSaving(true); setError(null);
-    const strengthSets = plan.exercises.flatMap((ex, ei) =>
-      sets[ei].filter((s) => s.kg || s.reps || s.rpe || s.dur).map((s, i) => ({
-        exerciseName: ex.name, setNo: i + 1,
-        reps: s.reps ? Number(s.reps) : null,
-        weightKg: s.kg ? Number(s.kg) : null,
-        durationSeconds: s.dur ? Number(s.dur) : null,
-        rpe: s.rpe ? Number(s.rpe) : null,
-      })),
-    );
+    // setNo counts WORKING sets from 1; warm-up sets carry setNo 0 and the flag.
+    const strengthSets = plan.exercises.flatMap((ex, ei) => {
+      let workNo = 0;
+      return sets[ei].filter((s) => s.kg || s.reps || s.rpe || s.dur).map((s) => {
+        if (!s.warmup) workNo += 1;
+        return {
+          exerciseName: ex.name, setNo: s.warmup ? 0 : workNo,
+          reps: s.reps ? Number(s.reps) : null,
+          weightKg: s.kg ? Number(s.kg) : null,
+          durationSeconds: s.dur ? Number(s.dur) : null,
+          isWarmup: s.warmup,
+          rpe: s.rpe ? Number(s.rpe) : null,
+        };
+      });
+    });
     const run = plan.hasRun ? {
       distanceKm: distanceKm ? Number(distanceKm) : null,
       avgHr: avgHr ? Number(avgHr) : null,
@@ -981,6 +1214,7 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
       rpeOverall: rpeOverall ? Number(rpeOverall) : null,
       energyPre: energyPre ? Number(energyPre) : null,
       ...(showCooldownPrompt ? { cooldownDone } : {}),
+      warmup, cooldown,
       notes: notes || null, strengthSets, run,
     });
     if (!res.ok) { setError(res.error ?? 'Could not save'); setSaving(false); return; }

@@ -58,11 +58,12 @@ model Session {
   energyPre    Int?      @map("energy_pre") // 1-5
   rpeOverall   Int?      @map("rpe_overall") // 1-10
   cooldownDone Boolean   @default(false) @map("cooldown_done") // 10-min cooldown (Foundation)
-  warmupDone   Boolean   @default(false) @map("warmup_done") // warm-up block ticked in the logger
-  // Structured warm-up / cool-down text (previously squeezed into `notes`).
-  // Free-form prose; rendered as their own collapsible blocks in the session view.
-  warmup       String? // planned warm-up routine (text)
-  cooldown     String? // planned cool-down routine (text)
+  warmupDone   Boolean   @default(false) @map("warmup_done") // legacy: whole warm-up ticked
+  // Structured warm-up / cool-down. Stored as a JSON array of items
+  // ({ name, detail?, weightKg?, done, loggedWeightKg? }). A legacy plain string
+  // is treated as a single item on read (backwards compatible).
+  warmup       String? // json: warm-up items (or legacy text)
+  cooldown     String? // json: cool-down items (or legacy text)
   source       String    @default("manual") // manual | strava | plan-api
   externalId   String?   @map("external_id") // e.g. Strava activity id (dedupe)
   notes        String?
@@ -122,6 +123,9 @@ model StrengthSet {
   weightKg     Float?  @map("weight_kg")
   // Logged hold/carry time for time-based sets (null for normal rep sets).
   durationSeconds Int? @map("duration_seconds")
+  // Warm-up set (ramp-up) vs a working set. Warm-up rows are logged but excluded
+  // from working-set numbering and flagged separately in exports.
+  isWarmup     Boolean @default(false) @map("is_warmup")
   rpe          Int? // 1-10
   notes        String?
 

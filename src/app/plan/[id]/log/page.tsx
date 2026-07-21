@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
 import { hasRunComponent, needsCooldownPrompt } from '@/lib/rules';
+import { parseFlowItems } from '@/lib/flowItems';
 import LogGrid, { type LogPlan } from './LogGrid';
 
 export const dynamic = 'force-dynamic';
@@ -29,10 +30,8 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
     title: session.title || `${session.type} session`,
     hasRun: hasRunComponent(session.type),
     needsCooldown: needsCooldownPrompt(session.type),
-    warmup: session.warmup,
-    cooldown: session.cooldown,
-    warmupDone: session.warmupDone,
-    cooldownDone: session.cooldownDone,
+    warmup: parseFlowItems(session.warmup),
+    cooldown: parseFlowItems(session.cooldown),
     exercises: session.plannedExercises.map((e) => {
       const p = prev[e.exerciseName];
       return {

@@ -39,7 +39,10 @@ const ADDITIVE_COLUMNS: Record<string, { name: string; type: string }[]> = {
     { name: 'duration_seconds', type: 'INTEGER' },
     { name: 'tempo', type: 'TEXT' },
   ],
-  strength_sets: [{ name: 'duration_seconds', type: 'INTEGER' }],
+  strength_sets: [
+    { name: 'duration_seconds', type: 'INTEGER' },
+    { name: 'is_warmup', type: 'BOOLEAN NOT NULL DEFAULT false' },
+  ],
 };
 
 async function ensureColumns(client: Client): Promise<void> {

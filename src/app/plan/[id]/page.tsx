@@ -5,6 +5,7 @@ import { previousWeights } from '@/lib/plannedSessions';
 import { shortDate } from '@/lib/format';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
+import { parseFlowItems } from '@/lib/flowItems';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,8 +65,8 @@ export default async function PlannedSessionPreview({
           rpeOverall: session.rpeOverall,
           energyPre: session.energyPre,
           cooldownDone: session.cooldownDone,
-          warmup: session.warmup,
-          cooldown: session.cooldown,
+          warmup: parseFlowItems(session.warmup),
+          cooldown: parseFlowItems(session.cooldown),
           source: session.source,
           notes: session.notes,
           sets: session.strengthSets.map((s) => ({
@@ -168,7 +169,7 @@ export default async function PlannedSessionPreview({
       </div>
 
       {/* Structured warm-up (own collapsible block) */}
-      {session.warmup && <StructuredBlock kind="warmup" text={session.warmup} />}
+      <StructuredBlock kind="warmup" items={parseFlowItems(session.warmup)} />
 
       {/* Plan */}
       <div className="section-head">
@@ -234,7 +235,7 @@ export default async function PlannedSessionPreview({
       )}
 
       {/* Structured cool-down (own collapsible block) */}
-      {session.cooldown && <StructuredBlock kind="cooldown" text={session.cooldown} />}
+      <StructuredBlock kind="cooldown" items={parseFlowItems(session.cooldown)} />
 
       <div style={{ height: 92 }} />
       {/* Fixed footer CTA */}

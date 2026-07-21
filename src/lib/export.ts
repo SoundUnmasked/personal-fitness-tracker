@@ -6,6 +6,7 @@
 import { prisma } from './prisma';
 import { isoDate } from './format';
 import { RUN_COMPONENT_TYPES, type SessionType } from './constants';
+import { parseFlowItems } from './flowItems';
 
 export type CellValue = string | number | null;
 
@@ -17,6 +18,25 @@ export interface Sheet {
 
 function yesNo(b: boolean): string {
   return b ? 'yes' : 'no';
+}
+
+/**
+ * One-line summary of a stored warm-up / cool-down column for the export.
+ * Each item: name, its detail, the actual (or planned) weight, and a ✓ when
+ * ticked — e.g. "Goblet squat 2×10 @20kg ✓; Band pull-aparts ✓".
+ */
+function flowSummary(raw: string | null): string {
+  const items = parseFlowItems(raw);
+  if (!items.length) return '';
+  return items
+    .map((it) => {
+      const weight = it.loggedWeightKg ?? it.weightKg ?? null;
+      const parts = [it.name];
+      if (it.detail) parts.push(it.detail);
+      if (weight != null) parts.push(`@${weight}kg`);
+      return `${parts.join(' ')}${it.done ? ' ✓' : ''}`;
+    })
+    .join('; ');
 }
 
 /** Build all four export sheets from the current database. */
@@ -68,17 +88,20 @@ export async function buildExportSheets(): Promise<Sheet[]> {
   // --- Tab 2: Gym Sessions (one row per set) -------------------------------
   const gymHeaders = [
     'Date', 'Type', 'Title', 'Duration (min)', 'Energy pre', 'Overall RPE',
-    'Cooldown done', 'Movement', 'Set', 'Reps', 'Weight (kg)', 'RPE', 'Notes',
+    'Cooldown done', 'Warm-up', 'Cool-down', 'Movement', 'Set', 'Warm-up set',
+    'Reps', 'Weight (kg)', 'RPE', 'Notes',
   ];
   const gymRows: CellValue[][] = [];
   for (const s of sessions) {
     if (isRun(s.type) && s.strengthSets.length === 0) continue; // pure run → tab 1
+    const warm = flowSummary(s.warmup);
+    const cool = flowSummary(s.cooldown);
     if (s.strengthSets.length === 0) {
       // A gym-type session with no logged sets still gets a summary line.
       gymRows.push([
         isoDate(s.date), s.type, s.title ?? '', s.durationMin ?? null,
         s.energyPre ?? null, s.rpeOverall ?? null, yesNo(s.cooldownDone),
-        '', '', '', '', '', s.notes ?? '',
+        warm, cool, '', '', '', '', '', '', s.notes ?? '',
       ]);
       continue;
     }
@@ -86,7 +109,8 @@ export async function buildExportSheets(): Promise<Sheet[]> {
       gymRows.push([
         isoDate(s.date), s.type, s.title ?? '', s.durationMin ?? null,
         s.energyPre ?? null, s.rpeOverall ?? null, yesNo(s.cooldownDone),
-        set.exerciseName, set.setNo, set.reps ?? null, set.weightKg ?? null,
+        warm, cool, set.exerciseName, set.setNo, yesNo(set.isWarmup),
+        set.reps ?? null, set.weightKg ?? null,
         set.rpe ?? null, set.notes ?? '',
       ]);
     }

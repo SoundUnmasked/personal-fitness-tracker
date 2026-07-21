@@ -13,6 +13,7 @@ import {
   type CompletePlanInput,
 } from '@/lib/plannedSessions';
 import { backToBackHardWarning, pickHrSource, normalizeHrSource } from '@/lib/rules';
+import { serializeFlowItems } from '@/lib/flowItems';
 
 export interface ActionResult {
   ok: boolean;
@@ -91,6 +92,9 @@ export async function completePlanAction(
         // cooldownDone is persisted live from the logger's cool-down block, so
         // only overwrite it when the finish step explicitly sends a value.
         ...(raw.cooldownDone !== undefined ? { cooldownDone: Boolean(raw.cooldownDone) } : {}),
+        // Persist logged warm-up / cool-down items (ticks + actual weights).
+        ...(raw.warmup !== undefined ? { warmup: serializeFlowItems(raw.warmup) } : {}),
+        ...(raw.cooldown !== undefined ? { cooldown: serializeFlowItems(raw.cooldown) } : {}),
         notes: strOrNull(raw.notes) ?? plan.notes,
         strengthSets: {
           create: sets
@@ -101,6 +105,7 @@ export async function completePlanAction(
               reps: intOrNull(s.reps),
               weightKg: floatOrNull(s.weightKg),
               durationSeconds: nonNegIntOrNull(s.durationSeconds),
+              isWarmup: Boolean(s.isWarmup),
               rpe: intOrNull(s.rpe),
               notes: strOrNull(s.notes),
             })),
@@ -117,22 +122,24 @@ export async function completePlanAction(
 }
 
 /**
- * Persist the warm-up / cool-down "done" ticks from the logger immediately,
- * without waiting for the session to be finished. Either flag is optional.
+ * Discard an in-progress session: throw away any logged actuals and return the
+ * session to "planned" so it can be started fresh. Used by the back-out sheet's
+ * "End session → Discard" path (behind an explicit warning). Never deletes the
+ * plan itself — only the actuals recorded against it.
  */
-export async function setSessionFlagsAction(
-  sessionId: number,
-  flags: { warmupDone?: boolean; cooldownDone?: boolean },
-): Promise<ActionResult> {
-  const data: { warmupDone?: boolean; cooldownDone?: boolean } = {};
-  if (flags.warmupDone !== undefined) data.warmupDone = flags.warmupDone;
-  if (flags.cooldownDone !== undefined) data.cooldownDone = flags.cooldownDone;
-  if (Object.keys(data).length === 0) return { ok: true };
-  try {
-    await prisma.session.update({ where: { id: sessionId }, data });
-  } catch {
-    return { ok: false, error: 'Could not save.' };
-  }
+export async function discardSessionAction(sessionId: number): Promise<ActionResult> {
+  const plan = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!plan) return { ok: false, error: 'Not found.' };
+  await prisma.$transaction(async (tx) => {
+    await tx.strengthSet.deleteMany({ where: { sessionId } });
+    await tx.run.deleteMany({ where: { sessionId } });
+    await tx.session.update({
+      where: { id: sessionId },
+      data: { status: 'planned', durationMin: null, energyPre: null, rpeOverall: null },
+    });
+  });
+  revalidatePath('/');
+  revalidatePath('/plan');
   return { ok: true };
 }
 

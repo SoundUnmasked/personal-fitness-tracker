@@ -14,12 +14,17 @@
 
 export interface DraftSetRow {
   kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string;
+  warmup?: boolean; // warm-up (ramp-up) row — sits above set 1, no set number
 }
+import type { FlowItem } from './flowItems';
+
 export interface SessionDraft {
   v: 2;
   sessionId: number;
   title: string;
   sets: DraftSetRow[][];
+  warmup?: FlowItem[];   // logged warm-up items (done + loggedWeightKg)
+  cooldown?: FlowItem[]; // logged cool-down items
   active: { ei: number; si: number; field: 'kg' | 'reps' | 'rpe' | 'dur' };
   elapsed: number;   // session seconds at last save
   paused: boolean;   // true once backed-out / paused → shown as "Continue"

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { shortDate } from '@/lib/format';
 import StructuredBlock from '@/components/StructuredBlock';
+import type { FlowItem } from '@/lib/flowItems';
 
 export interface CompletedSet {
   exerciseName: string;
@@ -31,8 +32,8 @@ export interface CompletedSession {
   rpeOverall: number | null;
   energyPre: number | null;
   cooldownDone: boolean;
-  warmup: string | null;
-  cooldown: string | null;
+  warmup: FlowItem[];
+  cooldown: FlowItem[];
   source: string;
   notes: string | null;
   sets: CompletedSet[];
@@ -88,7 +89,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       )}
 
       {/* Structured warm-up */}
-      {session.warmup && <StructuredBlock kind="warmup" text={session.warmup} />}
+      <StructuredBlock kind="warmup" items={session.warmup} />
 
       {/* Run block */}
       {run && (
@@ -148,7 +149,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       )}
 
       {/* Structured cool-down */}
-      {session.cooldown && <StructuredBlock kind="cooldown" text={session.cooldown} />}
+      <StructuredBlock kind="cooldown" items={session.cooldown} />
 
       <div style={{ height: 20 }} />
     </>

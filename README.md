@@ -213,8 +213,15 @@ Authorization: Bearer <PLANNED_SESSIONS_API_KEY>
   "title": "Lower body + sled",  // optional
   "location": "Third Space Wimbledon", // optional (defaults to this)
   "notes": "tempo focus",        // optional
-  "warmup": "5 min bike\n2×10 leg swings", // optional: structured warm-up text
-  "cooldown": "Couch stretch 2×60s",       // optional: structured cool-down text
+  // optional structured warm-up: array of items. Each item is
+  // { name, detail?, weightKg? } — weighted items get a weight field in the
+  // logger. A plain string is still accepted (stored as one item) for
+  // backwards compatibility.
+  "warmup": [
+    { "name": "Assault bike", "detail": "3 min easy" },
+    { "name": "Goblet squat", "detail": "2×10", "weightKg": 20 }
+  ],
+  "cooldown": "Couch stretch 2×60s",       // optional: array (as above) or legacy string
   "exercises": [                 // required: at least one
     {
       "name": "Back Squat",      // required
@@ -244,7 +251,12 @@ timer (default 90s); `tempo` (e.g. `"3030"`, `"31X1"`) enables a tempo metronome
 in the logger; `setStyle: "duration"` (or simply providing `durationSeconds`)
 makes a movement time-based — the logger shows a hold-time field with a count-up
 timer instead of reps, while `weightKg` still applies (e.g. Farmer's Carry).
-Session-level `warmup` / `cooldown` render as their own collapsible blocks.
+Session-level `warmup` / `cooldown` are structured item lists that render as
+their own collapsible blocks; in the logger each item is tickable, weighted
+items take a logged weight, and both ticks and weights persist as you go. Legacy
+plain-string values still render (as a single item). During a main exercise you
+can also mark individual set rows as **warm-up sets** — they sit above set 1 and
+never consume a working-set number.
 
 **Responses:**
 

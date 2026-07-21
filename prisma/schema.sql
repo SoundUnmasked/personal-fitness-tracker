@@ -58,6 +58,7 @@ CREATE TABLE "strength_sets" (
     "reps" INTEGER,
     "weight_kg" REAL,
     "duration_seconds" INTEGER,
+    "is_warmup" BOOLEAN NOT NULL DEFAULT false,
     "rpe" INTEGER,
     "notes" TEXT,
     CONSTRAINT "strength_sets_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE CASCADE
