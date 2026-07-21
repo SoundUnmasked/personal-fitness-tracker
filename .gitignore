@@ -32,6 +32,9 @@ next-env.d.ts
 !/sessions/README.md
 !/sessions/example-session.json
 
+# database backups (real training data — take a snapshot before destructive ops)
+/backups/
+
 # env
 .env
 .env*.local
