@@ -1,9 +1,67 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
+
+// ---------------------------------------------------------------------------
+// Audio cues (rest end + tempo phases).
+//
+// ONE shared AudioContext for the whole logger. Mobile Chrome caps the number
+// of live AudioContexts (~6) and silently refuses new ones past the limit — the
+// old code made a fresh context per beep, so sound died after a handful of cues
+// (≈ one tempo round). Here we keep a single context, resume it on a user
+// gesture (autoplay policy), and spin up a fresh short-lived oscillator+gain per
+// cue (oscillators are one-shot and can't be restarted).
+// ---------------------------------------------------------------------------
+let sharedAudioCtx: AudioContext | null = null;
+function getAudioCtx(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return null;
+    if (!sharedAudioCtx || sharedAudioCtx.state === 'closed') sharedAudioCtx = new AC();
+    return sharedAudioCtx;
+  } catch {
+    return null;
+  }
+}
+/** Call from a user-gesture handler so the context is allowed to make sound. */
+function unlockAudio(): void {
+  const ctx = getAudioCtx();
+  if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+}
+/** Play a short tone from a fresh node graph (safe to call rapidly). */
+function playTone(freq = 760, durSec = 0.14): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  try {
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.frequency.value = freq;
+    o.connect(g);
+    g.connect(ctx.destination);
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + durSec);
+    o.start(t);
+    o.stop(t + durSec + 0.02);
+    o.onended = () => {
+      try { o.disconnect(); g.disconnect(); } catch { /* already gone */ }
+    };
+  } catch {
+    /* audio not available */
+  }
+}
+function vibrate(pattern: number | number[]): void {
+  try { navigator.vibrate?.(pattern); } catch { /* no haptics */ }
+}
 
 export interface LogExercise {
   name: string;
@@ -82,20 +140,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
 
-  function beep() {
-    try {
-      const AC = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-      const ac = new AC();
-      const o = ac.createOscillator();
-      const g = ac.createGain();
-      o.frequency.value = 760; o.connect(g); g.connect(ac.destination);
-      g.gain.setValueAtTime(0.0001, ac.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.2, ac.currentTime + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.25);
-      o.start(); o.stop(ac.currentTime + 0.26);
-    } catch { /* audio not available */ }
-  }
-
   function startRest(sec: number) {
     if (restTimer.current) clearInterval(restTimer.current);
     setPanel('rest');
@@ -103,13 +147,14 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     restTimer.current = setInterval(() => {
       setRest((r) => {
         const rem = r.remaining - 1;
-        if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); beep(); return { ...r, remaining: 0, running: false }; }
+        if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); playTone(760); vibrate(60); return { ...r, remaining: 0, running: false }; }
         return { ...r, remaining: rem };
       });
     }, 1000);
   }
   function restAdjust(d: number) { setRest((r) => ({ ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) })); }
   function restToggle() {
+    unlockAudio(); // gesture — prime audio so the rest-end tone can play
     if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
     else startRest(rest.remaining > 0 ? rest.remaining : restFor(active.ei));
   }
@@ -150,13 +195,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     })));
   }
   function toggle(ei: number, si: number) {
+    unlockAudio(); // tap is a user gesture — unlock audio for later cues
     let nowDone = false;
     setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
       if (s !== si) return row; nowDone = !row.done; return { ...row, done: nowDone };
     })));
+    // Issue 8: ticking a set done auto-starts THIS exercise's rest timer
+    // (its restSeconds, 90s fallback) — no separate tap. Un-ticking does not.
     if (nowDone) startRest(restFor(ei));
   }
   function next() {
+    unlockAudio(); // gesture
     const order = fieldsForStyle(activeStyle);
     const idx = order.indexOf(active.field);
     if (idx > -1 && idx < order.length - 1) { setActive({ ...active, field: order[idx + 1] }); return; }
@@ -360,7 +409,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </button>
               </div>
             ) : (
-              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} beep={beep} /> : null
+              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} /> : null
             )}
           </>
         )}
@@ -406,54 +455,91 @@ function parseTempo(tempo: string): TempoPhase[] {
   return out;
 }
 
-function TempoPlayer({ tempo, beep }: { tempo: string; beep: () => void }) {
+interface TempoDisp { pi: number; remaining: number; rep: number }
+
+function TempoPlayer({ tempo }: { tempo: string }) {
   const phases = useMemo(() => parseTempo(tempo), [tempo]);
-  const initial = phases[0]?.sec ?? 0;
+  // Cumulative phase-end boundaries (seconds) and the full cycle length.
+  const bounds = useMemo(() => {
+    let acc = 0;
+    return phases.map((p) => (acc += p.sec));
+  }, [phases]);
+  const cycle = bounds.length ? bounds[bounds.length - 1] : 0;
+
   const [running, setRunning] = useState(false);
-  const [st, setSt] = useState({ pi: 0, remaining: initial, rep: 0 });
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [disp, setDisp] = useState<TempoDisp>({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
 
-  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
-  // Reset when the movement (tempo) changes.
-  useEffect(() => {
-    setRunning(false);
-    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
-    if (timer.current) clearInterval(timer.current);
-  }, [tempo, phases]);
-  // Cue phase changes (vibrate + click) while running.
-  useEffect(() => {
-    if (!running) return;
-    try { navigator.vibrate?.(st.pi === 0 ? [70, 40, 70] : 45); } catch { /* no haptics */ }
-    beep();
-  }, [st.pi, running, beep]);
+  const rafRef = useRef<number | null>(null);
+  const startedAtRef = useRef(0); // performance.now() when the current run segment began
+  const accumRef = useRef(0);     // ms of run time banked across pauses
+  const lastPhaseRef = useRef(-1); // global phase index of the last fired cue
 
-  function toggle() {
-    if (running) {
-      setRunning(false);
-      if (timer.current) clearInterval(timer.current);
-    } else {
-      if (!phases.length) return;
-      setRunning(true);
-      timer.current = setInterval(() => {
-        setSt((s) => {
-          if (s.remaining > 1) return { ...s, remaining: s.remaining - 1 };
-          let np = s.pi + 1;
-          let rep = s.rep;
-          if (np >= phases.length) { np = 0; rep = s.rep + 1; }
-          return { pi: np, remaining: phases[np]?.sec ?? 0, rep };
-        });
-      }, 1000);
+  const stopRaf = () => {
+    if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+  };
+
+  // A single absolute-timestamp loop. Phase, remaining and rep are DERIVED from
+  // elapsed time on every frame (compared against performance.now()), so nothing
+  // drifts and no phase is skipped even if a frame is late or the tab was
+  // briefly backgrounded. State is committed only when the shown values change,
+  // which keeps the countdown from jittering.
+  const frame = useCallback(() => {
+    if (!cycle) return;
+    const elapsed = (accumRef.current + (performance.now() - startedAtRef.current)) / 1000;
+    const rep = Math.floor(elapsed / cycle);
+    const within = elapsed - rep * cycle;
+    let pi = 0;
+    while (pi < bounds.length - 1 && within >= bounds[pi]) pi++;
+    const remaining = Math.max(0, bounds[pi] - within);
+
+    const globalPhase = rep * phases.length + pi;
+    if (globalPhase !== lastPhaseRef.current) {
+      lastPhaseRef.current = globalPhase;
+      // Phase 0 (start of a rep) gets a higher, double-buzz cue.
+      playTone(pi === 0 ? 990 : 760);
+      vibrate(pi === 0 ? [65, 40, 65] : 45);
     }
-  }
-  function reset() {
+
+    const remCeil = Math.max(0, Math.ceil(remaining - 1e-6));
+    setDisp((prev) =>
+      prev.pi === pi && prev.rep === rep && prev.remaining === remCeil
+        ? prev
+        : { pi, remaining: remCeil, rep },
+    );
+    rafRef.current = requestAnimationFrame(frame);
+  }, [bounds, cycle, phases.length]);
+
+  const start = useCallback(() => {
+    if (!phases.length) return;
+    unlockAudio(); // this Start press is the user gesture that enables audio
+    startedAtRef.current = performance.now();
+    setRunning(true);
+    stopRaf();
+    rafRef.current = requestAnimationFrame(frame);
+  }, [frame, phases.length]);
+
+  const pause = useCallback(() => {
+    accumRef.current += performance.now() - startedAtRef.current;
+    stopRaf();
     setRunning(false);
-    if (timer.current) clearInterval(timer.current);
-    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
-  }
+  }, []);
+
+  const reset = useCallback(() => {
+    stopRaf();
+    setRunning(false);
+    accumRef.current = 0;
+    lastPhaseRef.current = -1;
+    setDisp({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+  }, [phases]);
+
+  // Reset when the movement (tempo) changes, and clean up on unmount.
+  useEffect(() => { reset(); }, [tempo, reset]);
+  useEffect(() => () => stopRaf(), []);
 
   if (!phases.length) {
     return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
   }
+  const st = disp;
   const cur = phases[st.pi];
 
   return (
@@ -476,7 +562,7 @@ function TempoPlayer({ tempo, beep }: { tempo: string; beep: () => void }) {
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <button onClick={reset} style={restSmBtn}>Reset</button>
-        <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={toggle}>
+        <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={running ? pause : start}>
           <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
         </button>
       </div>
