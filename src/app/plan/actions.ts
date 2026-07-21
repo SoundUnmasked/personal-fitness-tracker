@@ -88,7 +88,9 @@ export async function completePlanAction(
         durationMin: intOrNull(raw.durationMin),
         energyPre: intOrNull(raw.energyPre),
         rpeOverall: intOrNull(raw.rpeOverall),
-        cooldownDone: Boolean(raw.cooldownDone),
+        // cooldownDone is persisted live from the logger's cool-down block, so
+        // only overwrite it when the finish step explicitly sends a value.
+        ...(raw.cooldownDone !== undefined ? { cooldownDone: Boolean(raw.cooldownDone) } : {}),
         notes: strOrNull(raw.notes) ?? plan.notes,
         strengthSets: {
           create: sets
@@ -112,6 +114,26 @@ export async function completePlanAction(
   revalidatePath('/plan');
   const combined = [warning, hrPickWarning].filter(Boolean).join(' ');
   return { ok: true, warning: combined || null };
+}
+
+/**
+ * Persist the warm-up / cool-down "done" ticks from the logger immediately,
+ * without waiting for the session to be finished. Either flag is optional.
+ */
+export async function setSessionFlagsAction(
+  sessionId: number,
+  flags: { warmupDone?: boolean; cooldownDone?: boolean },
+): Promise<ActionResult> {
+  const data: { warmupDone?: boolean; cooldownDone?: boolean } = {};
+  if (flags.warmupDone !== undefined) data.warmupDone = flags.warmupDone;
+  if (flags.cooldownDone !== undefined) data.cooldownDone = flags.cooldownDone;
+  if (Object.keys(data).length === 0) return { ok: true };
+  try {
+    await prisma.session.update({ where: { id: sessionId }, data });
+  } catch {
+    return { ok: false, error: 'Could not save.' };
+  }
+  return { ok: true };
 }
 
 /** Delete a planned session (only if still planned — never nukes history). */

@@ -2,18 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { completePlanAction } from '../../actions';
+import { completePlanAction, setSessionFlagsAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 
 // ---------------------------------------------------------------------------
-// Audio cues (rest end + tempo phases).
+// Audio cues (rest end + tempo metronome).
 //
 // ONE shared AudioContext for the whole logger. Mobile Chrome caps the number
 // of live AudioContexts (~6) and silently refuses new ones past the limit — the
-// old code made a fresh context per beep, so sound died after a handful of cues
-// (≈ one tempo round). Here we keep a single context, resume it on a user
-// gesture (autoplay policy), and spin up a fresh short-lived oscillator+gain per
-// cue (oscillators are one-shot and can't be restarted).
+// old code made a fresh context per beep, so sound died after a handful of cues.
+// Here we keep a single context, resume it on a user gesture (autoplay policy),
+// and spin up a fresh short-lived oscillator+gain per cue (oscillators are
+// one-shot and can't be restarted).
 // ---------------------------------------------------------------------------
 let sharedAudioCtx: AudioContext | null = null;
 function getAudioCtx(): AudioContext | null {
@@ -36,7 +36,7 @@ function unlockAudio(): void {
   if (ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
 }
 /** Play a short tone from a fresh node graph (safe to call rapidly). */
-function playTone(freq = 760, durSec = 0.14): void {
+function playTone(freq = 760, durSec = 0.14, peak = 0.22): void {
   const ctx = getAudioCtx();
   if (!ctx) return;
   if (ctx.state === 'suspended') ctx.resume().catch(() => {});
@@ -48,7 +48,7 @@ function playTone(freq = 760, durSec = 0.14): void {
     g.connect(ctx.destination);
     const t = ctx.currentTime;
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.22, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t + durSec);
     o.start(t);
     o.stop(t + durSec + 0.02);
@@ -82,6 +82,10 @@ export interface LogPlan {
   title: string;
   hasRun: boolean;
   needsCooldown: boolean;
+  warmup: string | null;
+  cooldown: string | null;
+  warmupDone: boolean;
+  cooldownDone: boolean;
   exercises: LogExercise[];
 }
 
@@ -107,29 +111,68 @@ const fieldsForStyle = (style: 'reps' | 'duration'): Field[] =>
 
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
+  // Draft key: logged progress is autosaved here on every change so backing out
+  // and returning resumes exactly where you were (item 5).
+  const DRAFT_KEY = `pft:logdraft:v1:${plan.id}`;
+
   const [sets, setSets] = useState<SetRow[][]>(() => plan.exercises.map(initSets));
   const [active, setActive] = useState<{ ei: number; si: number; field: Field }>({ ei: 0, si: 0, field: 'kg' });
   const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('entry');
+  const [resumed, setResumed] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [editEx, setEditEx] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ ei: number; si: number } | null>(null);
+  const [warmupDone, setWarmupDone] = useState(plan.warmupDone);
+  const [cooldownDone, setCooldownDone] = useState(plan.cooldownDone);
+
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
   const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s }; });
   const [elapsed, setElapsed] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restWasRunning = useRef(false);
 
   // Count-up stopwatch for duration-style sets.
   const [sw, setSw] = useState({ running: false, elapsed: 0 });
   const swElapsed = useRef(0);
   const swTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const swWasRunning = useRef(false);
 
   const activeEx = plan.exercises[active.ei];
   const activeStyle: 'reps' | 'duration' = activeEx?.setStyle === 'duration' ? 'duration' : 'reps';
   const activeHasTempo = !!activeEx?.tempo;
 
-  // session elapsed clock
+  // --- draft persistence ----------------------------------------------------
+  const persistDraft = useCallback((next: SetRow[][]) => {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ v: 1, sets: next })); } catch { /* storage full/blocked */ }
+  }, [DRAFT_KEY]);
+  const clearDraft = useCallback(() => {
+    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  }, [DRAFT_KEY]);
+  // Every set mutation goes through this so the exact next state is saved
+  // synchronously — nothing is lost if the screen is left immediately after.
+  const updateSets = useCallback((updater: (prev: SetRow[][]) => SetRow[][]) => {
+    setSets((prev) => { const next = updater(prev); persistDraft(next); return next; });
+  }, [persistDraft]);
+
+  // Hydrate any saved draft once, on mount.
   useEffect(() => {
+    try {
+      const raw = localStorage.getItem(DRAFT_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && Array.isArray(d.sets) && d.sets.length) { setSets(d.sets); setResumed(true); }
+      }
+    } catch { /* ignore */ }
+  }, [DRAFT_KEY]);
+
+  // session elapsed clock — frozen while paused
+  useEffect(() => {
+    if (paused) return;
     const t = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [paused]);
   useEffect(() => () => {
     if (restTimer.current) clearInterval(restTimer.current);
     if (swTimer.current) clearInterval(swTimer.current);
@@ -140,10 +183,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
 
-  function startRest(sec: number) {
+  // --- rest timer -----------------------------------------------------------
+  function runRestInterval() {
     if (restTimer.current) clearInterval(restTimer.current);
-    setPanel('rest');
-    setRest({ running: true, remaining: sec, total: sec });
     restTimer.current = setInterval(() => {
       setRest((r) => {
         const rem = r.remaining - 1;
@@ -152,17 +194,59 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       });
     }, 1000);
   }
+  function startRest(sec: number) {
+    setPanel('rest');
+    setRest({ running: true, remaining: sec, total: sec });
+    runRestInterval();
+  }
   function restAdjust(d: number) { setRest((r) => ({ ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) })); }
   function restToggle() {
     unlockAudio(); // gesture — prime audio so the rest-end tone can play
     if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
-    else startRest(rest.remaining > 0 ? rest.remaining : restFor(active.ei));
+    else { setRest((r) => ({ ...r, running: true, remaining: r.remaining > 0 ? r.remaining : restFor(active.ei), total: r.remaining > 0 ? r.total : restFor(active.ei) })); runRestInterval(); }
   }
   function restSkip() { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
+  // --- pause / resume / restart (item 5) ------------------------------------
+  function pauseSession() {
+    unlockAudio();
+    restWasRunning.current = rest.running;
+    if (rest.running && restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; setRest((r) => ({ ...r, running: false })); }
+    swWasRunning.current = sw.running;
+    if (sw.running && swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; setSw((s) => ({ ...s, running: false })); }
+    setPaused(true);
+  }
+  function resumeSession() {
+    setPaused(false);
+    if (restWasRunning.current) { setRest((r) => ({ ...r, running: true })); runRestInterval(); }
+    if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
+  }
+  function restartSession() {
+    clearDraft();
+    const fresh = plan.exercises.map(initSets);
+    setSets(fresh);
+    persistDraft(fresh);
+    setActive({ ei: 0, si: 0, field: 'kg' });
+    if (restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; }
+    const s0 = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS;
+    setRest({ running: false, remaining: s0, total: s0 });
+    if (swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; }
+    swElapsed.current = 0; setSw({ running: false, elapsed: 0 });
+    setElapsed(0);
+    setResumed(false);
+    setEditEx(null);
+    setPanel('entry');
+    setConfirmRestart(false);
+    setPaused(false);
+  }
+
   // --- duration count-up ----------------------------------------------------
+  function runSwInterval() {
+    if (swTimer.current) clearInterval(swTimer.current);
+    swTimer.current = setInterval(() => { swElapsed.current += 1; setSw({ running: true, elapsed: swElapsed.current }); }, 1000);
+  }
   function writeField(ei: number, si: number, field: Field, value: string) {
-    setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value } : row)));
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value } : row)));
   }
   function durToggle() {
     if (sw.running) {
@@ -170,13 +254,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       setSw({ running: false, elapsed: swElapsed.current });
       writeField(active.ei, active.si, 'dur', String(swElapsed.current));
     } else {
-      if (swTimer.current) clearInterval(swTimer.current);
       swElapsed.current = 0;
       setSw({ running: true, elapsed: 0 });
-      swTimer.current = setInterval(() => {
-        swElapsed.current += 1;
-        setSw({ running: true, elapsed: swElapsed.current });
-      }, 1000);
+      runSwInterval();
     }
   }
 
@@ -185,7 +265,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setActive({ ei, si, field }); setPanel('entry');
   }
   function press(v: string) {
-    setSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
+    updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
       if (si !== active.si) return row;
       let cur = row[active.field] || '';
       if (v === 'back') cur = cur.slice(0, -1);
@@ -197,7 +277,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   function toggle(ei: number, si: number) {
     unlockAudio(); // tap is a user gesture — unlock audio for later cues
     let nowDone = false;
-    setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
       if (s !== si) return row; nowDone = !row.done; return { ...row, done: nowDone };
     })));
     // Issue 8: ticking a set done auto-starts THIS exercise's rest timer
@@ -210,7 +290,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     const idx = order.indexOf(active.field);
     if (idx > -1 && idx < order.length - 1) { setActive({ ...active, field: order[idx + 1] }); return; }
     // mark done + advance
-    setSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((row, s) => s === active.si ? { ...row, done: true } : row)));
+    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((row, s) => s === active.si ? { ...row, done: true } : row)));
     const exSets = sets[active.ei];
     let na = active;
     if (active.si + 1 < exSets.length) na = { ei: active.ei, si: active.si + 1, field: 'kg' };
@@ -218,34 +298,76 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setActive(na);
     startRest(restFor(active.ei));
   }
-  const addSet = (ei: number) => setSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
+  const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
+
+  // Delete a set row: drops its actuals (item 1). Reached via edit-mode trash
+  // button or a left-swipe on the row, both confirmed first.
+  function deleteSet(ei: number, si: number) {
+    const preLen = sets[ei]?.length ?? 0;
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.filter((_, s) => s !== si)));
+    setDeleteTarget(null);
+    setActive((a) => {
+      if (a.ei !== ei) return a;
+      const newLen = preLen - 1;
+      return a.si >= newLen ? { ...a, si: Math.max(0, newLen - 1) } : a;
+    });
+  }
+
+  // Left-swipe on a row → delete confirm (a plain, scroll-safe touch gesture).
+  const touchRef = useRef<{ x: number; y: number; ei: number; si: number } | null>(null);
+  function rowTouchStart(e: React.TouchEvent, ei: number, si: number) {
+    const t = e.touches[0]; touchRef.current = { x: t.clientX, y: t.clientY, ei, si };
+  }
+  function rowTouchEnd(e: React.TouchEvent) {
+    const p = touchRef.current; touchRef.current = null;
+    if (!p) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - p.x, dy = t.clientY - p.y;
+    if (dx <= -50 && Math.abs(dx) > Math.abs(dy) * 1.5) setDeleteTarget({ ei: p.ei, si: p.si });
+  }
+
+  // --- warm-up / cool-down done ticks (item 3) ------------------------------
+  function toggleWarmup() { const v = !warmupDone; setWarmupDone(v); setSessionFlagsAction(plan.id, { warmupDone: v }); }
+  function toggleCooldown() { const v = !cooldownDone; setCooldownDone(v); setSessionFlagsAction(plan.id, { cooldownDone: v }); }
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
+  const activeLen = sets[active.ei]?.length ?? 0;
 
   // Last column holds the set-done toggle — 44px so the most-tapped control
   // in the gym meets the minimum comfortable touch-target size.
-  const cols = '24px 58px 1fr 1fr 1fr 44px';
+  const cols = '30px 56px 1fr 1fr 1fr 44px';
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
 
   return (
     <>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9, padding: '10px 2px', marginBottom: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4 }}>
         <button className="icon-btn" onClick={() => router.push(`/plan/${plan.id}`)} aria-label="Back to session"><span className="msr" aria-hidden="true">chevron_left</span></button>
-        <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{plan.title}</div>
+        <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
             {plan.type} · <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>
           </div>
         </div>
+        <button className="icon-btn" onClick={pauseSession} aria-label="Pause session"><span className="msr" aria-hidden="true">pause</span></button>
         <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>Finish</button>
       </div>
 
+      {resumed && (
+        <div className="note note-accent" style={{ marginBottom: 10 }}>
+          <span className="msr-fill" aria-hidden="true">restore</span>
+          Resumed your in-progress session. Your logged sets are saved as you go.
+        </div>
+      )}
+
+      {/* Structured warm-up (top) — a block, never set rows (item 3) */}
+      {plan.warmup && <FlowBlock kind="warmup" text={plan.warmup} done={warmupDone} onToggle={toggleWarmup} />}
+
       {/* Exercise cards */}
-      <div className="stack stack-12" style={{ paddingBottom: 360 }}>
+      <div className="stack stack-12" style={{ paddingBottom: 360, marginTop: plan.warmup ? 12 : 0 }}>
         {groups.map((g, gi) => (
           <div key={gi}>
             {g.label && (
@@ -258,6 +380,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
               const done = sets[index].filter((s) => s.done).length;
               const style = ex.setStyle === 'duration' ? 'duration' : 'reps';
               const midLabel = style === 'duration' ? 'SEC' : 'REPS';
+              const editing = editEx === index;
               return (
                 <div key={index} className="card" style={{ padding: 15, marginBottom: g.items.length > 1 ? 10 : 0, borderLeft: `3px solid ${activeHere ? 'var(--accent)' : 'var(--border)'}` }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
@@ -269,7 +392,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                           : `${ex.targetSets ?? '—'} × ${ex.targetReps ?? '—'} target`}
                       </div>
                     </div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length && sets[index].length > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
+                      <button onClick={() => setEditEx(editing ? null : index)} aria-label={editing ? 'Done editing sets' : 'Edit sets'} style={{ height: 26, padding: '0 9px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid var(--border)', background: editing ? 'var(--accent-soft)' : 'var(--surface)', color: editing ? 'var(--accent)' : 'var(--text-dim)' }}>
+                        {editing ? 'Done' : 'Edit'}
+                      </button>
+                    </div>
                   </div>
 
                   {/* per-exercise rest / tempo / style pills */}
@@ -293,11 +421,21 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div />
                   </div>
 
+                  {sets[index].length === 0 && (
+                    <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '8px 2px' }}>No sets — add one below.</div>
+                  )}
+
                   {sets[index].map((st, si) => {
                     const rowActive = activeHere && active.si === si;
                     return (
-                    <div key={si} style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, textAlign: 'center', color: st.done ? 'var(--accent)' : rowActive ? 'var(--accent)' : 'var(--text-dim)' }}>{si + 1}</div>
+                    <div key={si}
+                      onTouchStart={(e) => rowTouchStart(e, index, si)}
+                      onTouchEnd={rowTouchEnd}
+                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
+                      {/* SET number — prominent at a glance (item 2) */}
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: st.done ? 'var(--on-accent)' : rowActive ? 'var(--accent)' : 'var(--text)', background: st.done ? 'var(--accent)' : rowActive ? 'var(--accent-soft)' : 'transparent' }}>{si + 1}</div>
+                      </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.15 }}>
                         {st.prevKg ? (
                           <>
@@ -313,28 +451,43 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                         <Cell active={rowActive && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
                       )}
                       <Cell active={rowActive && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
-                      <button onClick={() => toggle(index, si)} aria-label={st.done ? `Set ${si + 1} done` : `Mark set ${si + 1} done`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
-                        <span className="msr-fill" aria-hidden="true">check</span>
-                      </button>
+                      {editing ? (
+                        <button onClick={() => setDeleteTarget({ ei: index, si })} aria-label={`Delete set ${si + 1}`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, cursor: 'pointer', background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>
+                          <span className="msr" aria-hidden="true">delete</span>
+                        </button>
+                      ) : (
+                        <button onClick={() => toggle(index, si)} aria-label={st.done ? `Set ${si + 1} done` : `Mark set ${si + 1} done`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: st.done ? 'var(--accent)' : 'transparent', color: st.done ? 'var(--on-accent)' : 'var(--text-faint)', border: st.done ? 'none' : '1.5px solid var(--border)' }}>
+                          <span className="msr-fill" aria-hidden="true">check</span>
+                        </button>
+                      )}
                     </div>
                     );
                   })}
 
                   {activeHere && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 9, fontSize: 10.5, fontWeight: 600, letterSpacing: '0.02em', color: 'var(--accent)' }}>
-                      <span className="msr" style={{ fontSize: 14 }} aria-hidden="true">touch_app</span>
-                      Tap a cell, then use the keypad below to log
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: '0.03em', color: 'var(--accent)' }}>SET {active.si + 1} OF {activeLen}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-faint)' }}>
+                        <span className="msr" style={{ fontSize: 13 }} aria-hidden="true">touch_app</span>
+                        tap a cell, then use the keypad below
+                      </div>
                     </div>
                   )}
 
-                  <button onClick={() => addSet(index)} style={{ marginTop: 11, width: '100%', height: 36, borderRadius: 11, border: '1px dashed var(--border)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)', cursor: 'pointer' }}>
-                    <span className="msr" aria-hidden="true">add</span>Add set
-                  </button>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 11, alignItems: 'center' }}>
+                    <button onClick={() => addSet(index)} style={{ flex: 1, height: 36, borderRadius: 11, border: '1px dashed var(--border)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)', cursor: 'pointer' }}>
+                      <span className="msr" aria-hidden="true">add</span>Add set
+                    </button>
+                    {editing && <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>Tap <span className="msr" style={{ fontSize: 12, verticalAlign: 'middle' }} aria-hidden="true">delete</span> to remove a set</div>}
+                  </div>
                 </div>
               );
             })}
           </div>
         ))}
+
+        {/* Structured cool-down (bottom) — a block, never set rows (item 3) */}
+        {plan.cooldown && <FlowBlock kind="cooldown" text={plan.cooldown} done={cooldownDone} onToggle={toggleCooldown} />}
       </div>
 
       {/* Bottom entry panel */}
@@ -361,7 +514,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
             {panel === 'entry' ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11, padding: '0 2px' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>SET {active.si + 1} · {FIELD_LABEL[active.field]}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>SET {active.si + 1} OF {activeLen} · {FIELD_LABEL[active.field]}</div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
                     <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>{activeVal === '' ? '0' : activeVal}</div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>{FIELD_UNIT[active.field]}</div>
@@ -409,11 +562,48 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </button>
               </div>
             ) : (
-              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} /> : null
+              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} frozen={paused} /> : null
             )}
           </>
         )}
       </div>
+
+      {/* Paused overlay (item 5) */}
+      {paused && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 }}>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>PAUSED</div>
+          <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{mmss(elapsed)}</div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-dim)', textAlign: 'center', maxWidth: 260 }}>{doneCount} of {totalCount} sets logged · saved automatically</div>
+          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>Resume session</button>
+          <button onClick={() => setConfirmRestart(true)} style={{ ...restSmBtn, maxWidth: 300, width: '100%', flex: 'none', height: 48, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>Restart — clear progress</button>
+        </div>
+      )}
+
+      {/* Delete-set confirm (item 1) */}
+      {deleteTarget && (
+        <ConfirmDialog
+          icon="delete"
+          title={`Remove set ${deleteTarget.si + 1}?`}
+          body="This removes the set row and any values logged for it. This can't be undone."
+          confirmLabel="Remove set"
+          danger
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => deleteSet(deleteTarget.ei, deleteTarget.si)}
+        />
+      )}
+
+      {/* Restart confirm (item 5) */}
+      {confirmRestart && (
+        <ConfirmDialog
+          icon="restart_alt"
+          title="Restart this session?"
+          body="This clears every set you've logged in this session and starts over. This can't be undone."
+          confirmLabel="Clear & restart"
+          danger
+          onCancel={() => setConfirmRestart(false)}
+          onConfirm={restartSession}
+        />
+      )}
 
       {finishing && (
         <FinishSheet
@@ -421,7 +611,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           sets={sets}
           progress={`${doneCount}/${totalCount}`}
           onClose={() => setFinishing(false)}
-          onSaved={() => router.push('/')}
+          onSaved={() => { clearDraft(); router.push('/'); }}
         />
       )}
     </>
@@ -440,6 +630,53 @@ function Cell({ active, filled, value, onClick }: { active: boolean; filled: boo
   return <button type="button" style={style} onClick={onClick}>{value !== '' ? value : active ? '' : '–'}</button>;
 }
 
+// --- Reusable confirm dialog -------------------------------------------------
+function ConfirmDialog({ icon, title, body, confirmLabel, danger, onCancel, onConfirm }: {
+  icon: string; title: string; body: string; confirmLabel: string; danger?: boolean; onCancel: () => void; onConfirm: () => void;
+}) {
+  return (
+    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 80, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 22 }} onClick={onCancel}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 340, background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', border: '1px solid var(--border)', borderRadius: 22, padding: 20, textAlign: 'center' }}>
+        <div style={{ width: 46, height: 46, margin: '0 auto 12px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: danger ? 'var(--err-tint)' : 'var(--accent-soft)' }}>
+          <span className="msr-fill" style={{ fontSize: 22, color: danger ? 'var(--err-text)' : 'var(--accent)' }} aria-hidden="true">{icon}</span>
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 13, color: 'var(--text-dim)', marginTop: 6, lineHeight: 1.4 }}>{body}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 18 }}>
+          <button onClick={onCancel} style={{ ...restSmBtn, height: 46 }}>Cancel</button>
+          <button onClick={onConfirm} style={{ ...restSmBtn, height: 46, flex: 1.3, background: danger ? 'var(--err-tint)' : 'var(--accent)', color: danger ? 'var(--err-text)' : 'var(--on-accent)', border: danger ? '1px solid var(--err-line)' : 'none' }}>{confirmLabel}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Warm-up / cool-down block in the logging flow (item 3) ------------------
+function FlowBlock({ kind, text, done, onToggle }: { kind: 'warmup' | 'cooldown'; text: string; done: boolean; onToggle: () => void }) {
+  const [open, setOpen] = useState(true);
+  const isWarm = kind === 'warmup';
+  return (
+    <div className="card" style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${done ? 'var(--accent)' : 'var(--border)'}` }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px' }}>
+        <button onClick={() => setOpen((o) => !o)} aria-label={open ? 'Collapse' : 'Expand'} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 1, minWidth: 0, background: 'transparent', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0, color: 'var(--text)' }}>
+          <span className="msr-fill" style={{ fontSize: 19, color: 'var(--accent)' }} aria-hidden="true">{isWarm ? 'local_fire_department' : 'self_improvement'}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>{isWarm ? 'Warm-up' : 'Cool-down'}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{done ? 'Done' : isWarm ? 'Before you start' : 'After the work'}</div>
+          </div>
+          <span className="msr" style={{ fontSize: 20, color: 'var(--text-faint)', transform: open ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} aria-hidden="true">expand_more</span>
+        </button>
+        <button onClick={onToggle} aria-label={done ? `Mark ${kind} not done` : `Mark ${kind} done`} aria-pressed={done} style={{ width: 40, height: 40, flex: 'none', borderRadius: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, cursor: 'pointer', background: done ? 'var(--accent)' : 'transparent', color: done ? 'var(--on-accent)' : 'var(--text-faint)', border: done ? 'none' : '1.5px solid var(--border)' }}>
+          <span className="msr-fill" aria-hidden="true">check</span>
+        </button>
+      </div>
+      {open && (
+        <div style={{ padding: '0 14px 13px', fontSize: 13, lineHeight: 1.5, color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{text}</div>
+      )}
+    </div>
+  );
+}
+
 // --- Tempo metronome ---------------------------------------------------------
 interface TempoPhase { label: string; sec: number; }
 function parseTempo(tempo: string): TempoPhase[] {
@@ -454,10 +691,16 @@ function parseTempo(tempo: string): TempoPhase[] {
   });
   return out;
 }
+// Distinct tone per phase kind: high on the lift, low on the way down, mid on a hold.
+function phaseFreq(label: string): number {
+  if (label === 'Lower') return 440;
+  if (label === 'Raise' || label === 'Explode') return 990;
+  return 700; // Bottom / Top holds
+}
 
 interface TempoDisp { pi: number; remaining: number; rep: number }
 
-function TempoPlayer({ tempo }: { tempo: string }) {
+function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
   const phases = useMemo(() => parseTempo(tempo), [tempo]);
   // Cumulative phase-end boundaries (seconds) and the full cycle length.
   const bounds = useMemo(() => {
@@ -472,7 +715,8 @@ function TempoPlayer({ tempo }: { tempo: string }) {
   const rafRef = useRef<number | null>(null);
   const startedAtRef = useRef(0); // performance.now() when the current run segment began
   const accumRef = useRef(0);     // ms of run time banked across pauses
-  const lastPhaseRef = useRef(-1); // global phase index of the last fired cue
+  const lastSecondRef = useRef(-1); // last whole-second index that ticked
+  const lastPhaseRef = useRef(-1);  // global phase index at the last tick
 
   const stopRaf = () => {
     if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
@@ -480,9 +724,9 @@ function TempoPlayer({ tempo }: { tempo: string }) {
 
   // A single absolute-timestamp loop. Phase, remaining and rep are DERIVED from
   // elapsed time on every frame (compared against performance.now()), so nothing
-  // drifts and no phase is skipped even if a frame is late or the tab was
-  // briefly backgrounded. State is committed only when the shown values change,
-  // which keeps the countdown from jittering.
+  // drifts. The metronome ticks once EVERY whole second (item 4): a distinct
+  // pitch on the second a phase begins (high on the lift, low on the lower),
+  // and a soft tick on the seconds in between. No vibration in this loop.
   const frame = useCallback(() => {
     if (!cycle) return;
     const elapsed = (accumRef.current + (performance.now() - startedAtRef.current)) / 1000;
@@ -491,13 +735,15 @@ function TempoPlayer({ tempo }: { tempo: string }) {
     let pi = 0;
     while (pi < bounds.length - 1 && within >= bounds[pi]) pi++;
     const remaining = Math.max(0, bounds[pi] - within);
-
     const globalPhase = rep * phases.length + pi;
-    if (globalPhase !== lastPhaseRef.current) {
+
+    const secondIndex = Math.floor(elapsed + 1e-6);
+    if (secondIndex !== lastSecondRef.current) {
+      lastSecondRef.current = secondIndex;
+      const phaseStart = globalPhase !== lastPhaseRef.current;
       lastPhaseRef.current = globalPhase;
-      // Phase 0 (start of a rep) gets a higher, double-buzz cue.
-      playTone(pi === 0 ? 990 : 760);
-      vibrate(pi === 0 ? [65, 40, 65] : 45);
+      if (phaseStart) playTone(phaseFreq(phases[pi].label), 0.11, 0.28);
+      else playTone(620, 0.05, 0.14); // soft in-phase tick
     }
 
     const remCeil = Math.max(0, Math.ceil(remaining - 1e-6));
@@ -507,7 +753,7 @@ function TempoPlayer({ tempo }: { tempo: string }) {
         : { pi, remaining: remCeil, rep },
     );
     rafRef.current = requestAnimationFrame(frame);
-  }, [bounds, cycle, phases.length]);
+  }, [bounds, cycle, phases]);
 
   const start = useCallback(() => {
     if (!phases.length) return;
@@ -528,6 +774,7 @@ function TempoPlayer({ tempo }: { tempo: string }) {
     stopRaf();
     setRunning(false);
     accumRef.current = 0;
+    lastSecondRef.current = -1;
     lastPhaseRef.current = -1;
     setDisp({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
   }, [phases]);
@@ -535,6 +782,8 @@ function TempoPlayer({ tempo }: { tempo: string }) {
   // Reset when the movement (tempo) changes, and clean up on unmount.
   useEffect(() => { reset(); }, [tempo, reset]);
   useEffect(() => () => stopRaf(), []);
+  // Freeze when the whole session is paused.
+  useEffect(() => { if (frozen && running) pause(); }, [frozen, running, pause]);
 
   if (!phases.length) {
     return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
@@ -566,7 +815,7 @@ function TempoPlayer({ tempo }: { tempo: string }) {
           <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
         </button>
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Haptic + tone cue on each phase change</div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Ticks every second · higher tone on the lift, lower on the way down</div>
     </div>
   );
 }
@@ -602,6 +851,10 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
+  // The structured cool-down block owns cooldownDone when there IS cool-down
+  // text; only fall back to this finish prompt otherwise.
+  const showCooldownPrompt = plan.needsCooldown && !plan.cooldown;
+
   async function save() {
     setSaving(true); setError(null);
     const strengthSets = plan.exercises.flatMap((ex, ei) =>
@@ -621,7 +874,8 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
     const res = await completePlanAction(plan.id, {
       rpeOverall: rpeOverall ? Number(rpeOverall) : null,
       energyPre: energyPre ? Number(energyPre) : null,
-      cooldownDone, notes: notes || null, strengthSets, run,
+      ...(showCooldownPrompt ? { cooldownDone } : {}),
+      notes: notes || null, strengthSets, run,
     });
     if (!res.ok) { setError(res.error ?? 'Could not save'); setSaving(false); return; }
     if (res.warning) { setWarning(res.warning); setTimeout(onSaved, 2200); return; }
@@ -678,7 +932,7 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
           </>
         )}
 
-        {plan.needsCooldown && (
+        {showCooldownPrompt && (
           <PromptCheck checked={cooldownDone} onChange={setCooldown} label="10-minute cooldown done" />
         )}
 

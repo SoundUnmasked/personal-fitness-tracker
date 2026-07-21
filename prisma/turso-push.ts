@@ -31,6 +31,7 @@ const ADDITIVE_COLUMNS: Record<string, { name: string; type: string }[]> = {
   sessions: [
     { name: 'warmup', type: 'TEXT' },
     { name: 'cooldown', type: 'TEXT' },
+    { name: 'warmup_done', type: "BOOLEAN NOT NULL DEFAULT false" },
   ],
   planned_exercises: [
     { name: 'rest_seconds', type: 'INTEGER' },

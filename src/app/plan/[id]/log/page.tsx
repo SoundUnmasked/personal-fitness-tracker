@@ -29,6 +29,10 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
     title: session.title || `${session.type} session`,
     hasRun: hasRunComponent(session.type),
     needsCooldown: needsCooldownPrompt(session.type),
+    warmup: session.warmup,
+    cooldown: session.cooldown,
+    warmupDone: session.warmupDone,
+    cooldownDone: session.cooldownDone,
     exercises: session.plannedExercises.map((e) => {
       const p = prev[e.exerciseName];
       return {
