@@ -193,7 +193,16 @@ export async function moveSessionDate(prisma: PrismaClient, id: number, dateIso:
 
 /**
  * Delete a session and every child row (planned exercises, strength sets, runs)
- * in one transaction, so nothing is orphaned regardless of DB cascade settings.
+ * in one transaction.
+ *
+ * FK note (Package G.1): the schema DOES declare `ON DELETE CASCADE` on all
+ * three child tables (see prisma/schema.sql, applied to Turso by turso-push.ts).
+ * But SQLite/libSQL only ENFORCES foreign keys when `PRAGMA foreign_keys = ON`
+ * is set on the connection, which is not guaranteed with the libSQL driver
+ * adapter used against Turso. So we do NOT rely on cascade: we delete each child
+ * table explicitly, then the session. This is correct whether or not FK
+ * enforcement (and therefore cascade) is active. Children are removed before the
+ * parent so it holds even under strict FK enforcement.
  */
 export async function deleteSessionCascade(prisma: PrismaClient, id: number): Promise<void> {
   await prisma.$transaction(async (tx) => {

@@ -20,6 +20,41 @@ function parseId(raw: string): number | null {
 }
 
 /**
+ * GET /api/planned-sessions/:id — session summary plus a count of the child
+ * rows that a delete would remove. Used by `delete-session.ts` to preview /
+ * dry-run a deletion before confirming.
+ */
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const auth = checkPlannedSessionsKey(req.headers);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  const { id: raw } = await ctx.params;
+  const id = parseId(raw);
+  if (id == null) return NextResponse.json({ error: 'Invalid session id.' }, { status: 400 });
+
+  const session = await prisma.session.findUnique({
+    where: { id },
+    select: {
+      id: true, title: true, type: true, date: true, status: true,
+      _count: { select: { plannedExercises: true, strengthSets: true, runs: true } },
+    },
+  });
+  if (!session) return NextResponse.json({ error: 'Session not found.' }, { status: 404 });
+
+  return NextResponse.json({
+    session: {
+      id: session.id, title: session.title, type: session.type,
+      date: session.date.toISOString(), status: session.status,
+    },
+    counts: {
+      plannedExercises: session._count.plannedExercises,
+      strengthSets: session._count.strengthSets,
+      runs: session._count.runs,
+    },
+  });
+}
+
+/**
  * DELETE /api/planned-sessions/:id — remove a session and all of its children
  * (planned exercises, strength sets, runs). Works for planned or completed.
  */

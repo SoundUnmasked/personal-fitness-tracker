@@ -282,21 +282,31 @@ curl -X POST http://localhost:3000/api/planned-sessions \
 | Method / path | Purpose |
 |---|---|
 | `GET /api/planned-sessions?scope=upcoming\|all` | List planned sessions (id, date, title). Used by the delete/push CLIs. |
+| `GET /api/planned-sessions/:id` | Session summary + counts of the children a delete would remove (used by the delete preview). |
 | `PATCH /api/planned-sessions/:id` | Move a planned session's date. Body `{ "date": "YYYY-MM-DD", "force"?: true }`. Responds `409` with a `clash` if the day is occupied and `force` is not set; `409` if the session is completed. |
 | `DELETE /api/planned-sessions/:id` | Delete a session (planned or completed) and all of its children. |
 
+These endpoints authenticate with `x-api-key` and are exempt from the passphrase
+gate, so the CLIs work headless without unlocking the app in a browser. That is
+intentional: the key is the credential for machine callers.
+
 ### CLI helpers
 
-Payload files live in `sessions/` (gitignored). See `sessions/README.md`.
+Payload files live in `sessions/` (gitignored; only `example-session.json` is
+committed). Backups go to `backups/` (gitignored). See `sessions/README.md`.
 
 ```bash
 export PLANNED_SESSIONS_API_KEY=...          # the x-api-key
 export PFT_API_URL=http://localhost:3000     # target app (default)
 
-npx tsx scripts/push-session.ts sessions/<file>.json --dry-run  # validate only
-npx tsx scripts/push-session.ts sessions/<file>.json            # create
-npx tsx scripts/delete-session.ts --list                        # ids + dates
-npx tsx scripts/delete-session.ts <id>                          # delete by id
+# take a snapshot first (dumps every table to backups/backup-<timestamp>.json)
+npx tsx scripts/backup-db.ts
+
+npx tsx scripts/push-session.ts sessions/example-session.json --dry-run  # validate only
+npx tsx scripts/push-session.ts sessions/your-plan.json                  # create
+npx tsx scripts/delete-session.ts --list             # ids + dates
+npx tsx scripts/delete-session.ts <id> --dry-run     # preview what would be removed
+npx tsx scripts/delete-session.ts <id>               # preview, confirm, then delete
 ```
 
 In the app itself, the session detail screen and every Calendar row expose a
