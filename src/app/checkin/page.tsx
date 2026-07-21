@@ -105,7 +105,7 @@ export default function CheckinPage() {
         <div className="eyebrow eyebrow-accent" style={{ minHeight: 14 }}>{dateLabel}</div>
         <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 8 }}>How are you feeling today?</div>
         <div style={{ fontSize: 13.5, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 8 }}>
-          A few quick sliders. This is the part only you can answer — it fine-tunes today&apos;s readiness. (Wearable sleep/HRV will feed in later.)
+          A few quick sliders. This is the part only you can answer. It fine-tunes today&apos;s readiness. (Wearable sleep/HRV will feed in later.)
         </div>
       </div>
 

@@ -59,7 +59,7 @@ export default function NewPlanChooser() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="h2">Plan in app</div>
             <div style={{ fontSize: 12.5, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 4 }}>
-              Build a session by hand with the form — type, date, movements and targets.
+              Build a session by hand with the form: type, date, movements and targets.
             </div>
           </div>
           <span className="msr" style={{ fontSize: 20, color: 'var(--text-faint)', alignSelf: 'center' }}>chevron_right</span>

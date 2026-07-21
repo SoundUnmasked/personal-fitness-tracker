@@ -16,7 +16,7 @@ export default function BodyCompChart({
 
   const all = [...inbody, ...withings].filter((p) => p.weightKg != null);
   if (all.length === 0) {
-    return <p className="empty">No body-composition data yet — add an InBody or sync Withings.</p>;
+    return <p className="empty">No body-composition data yet. Add an InBody or sync Withings.</p>;
   }
 
   const ts = all.map((p) => p.t);

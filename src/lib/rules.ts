@@ -90,7 +90,7 @@ export function pickHrSource(available: (string | null | undefined)[]): HrPick {
         source,
         unreliable,
         warning: unreliable
-          ? `HR from ${source} — least-reliable fallback (Elvanse-inflated); no COROS/Technogym reading available.`
+          ? `HR from ${source}: least-reliable fallback (Elvanse-inflated); no COROS/Technogym reading available.`
           : null,
       };
     }

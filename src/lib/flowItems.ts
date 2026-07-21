@@ -66,3 +66,27 @@ export function parseFlowItems(raw: string | null | undefined): FlowItem[] {
 export function serializeFlowItems(items: FlowItem[] | null | undefined): string | null {
   return items && items.length ? JSON.stringify(items) : null;
 }
+
+/**
+ * Read a stored column into a discriminated shape so the UI can render the two
+ * cases differently (item 5): a structured JSON array becomes a tickable list,
+ * while a legacy plain string becomes readable prose (never a tickable row).
+ */
+export interface FlowContent {
+  items: FlowItem[];
+  legacyText: string | null;
+}
+export function readFlow(raw: string | null | undefined): FlowContent {
+  if (!raw) return { items: [], legacyText: null };
+  const s = raw.trim();
+  if (!s) return { items: [], legacyText: null };
+  if (s.startsWith('[')) {
+    try {
+      const a = JSON.parse(s);
+      if (Array.isArray(a)) {
+        return { items: a.map(coerceItem).filter((x): x is FlowItem => x !== null), legacyText: null };
+      }
+    } catch { /* fall through to legacy prose */ }
+  }
+  return { items: [], legacyText: s };
+}

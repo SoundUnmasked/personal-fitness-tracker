@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import { shortDate } from '@/lib/format';
 import StructuredBlock from '@/components/StructuredBlock';
-import type { FlowItem } from '@/lib/flowItems';
 
 export interface CompletedSet {
   exerciseName: string;
@@ -32,8 +31,8 @@ export interface CompletedSession {
   rpeOverall: number | null;
   energyPre: number | null;
   cooldownDone: boolean;
-  warmup: FlowItem[];
-  cooldown: FlowItem[];
+  warmup: string | null;
+  cooldown: string | null;
   source: string;
   notes: string | null;
   sets: CompletedSet[];
@@ -76,7 +75,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       <div className="stat-row" style={{ marginTop: 18 }}>
         <Total icon="local_fire_department" value={session.type} label="type" />
         <Total icon="fitness_center" value={String(groups.length || (run ? 1 : 0))} label={run && groups.length === 0 ? 'run' : 'exercises'} />
-        <Total icon="schedule" value={session.durationMin ? `${session.durationMin}m` : '—'} label="duration" />
+        <Total icon="schedule" value={session.durationMin ? `${session.durationMin}m` : '·'} label="duration" />
       </div>
 
       {/* Session meta chips */}
@@ -89,7 +88,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       )}
 
       {/* Structured warm-up */}
-      <StructuredBlock kind="warmup" items={session.warmup} />
+      <StructuredBlock kind="warmup" raw={session.warmup} />
 
       {/* Run block */}
       {run && (
@@ -97,16 +96,16 @@ export default function CompletedView({ session }: { session: CompletedSession }
           <div className="section-head"><div className="h2">Run</div></div>
           <div className="card card-md">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px 24px' }}>
-              <Metric label="Distance" value={run.distanceKm != null ? `${run.distanceKm} km` : '—'} />
-              <Metric label="Duration" value={run.durationMin != null ? `${Math.round(run.durationMin)} min` : '—'} />
-              <Metric label="Pace" value={run.avgPace || '—'} />
-              <Metric label="Avg HR" value={run.avgHr != null ? `${run.avgHr} bpm` : '—'} />
-              <Metric label="Max HR" value={run.maxHr != null ? `${run.maxHr} bpm` : '—'} />
-              <Metric label="HR source" value={run.hrSource || '—'} accent={run.hrSource != null && run.hrSource !== 'Samsung'} />
+              <Metric label="Distance" value={run.distanceKm != null ? `${run.distanceKm} km` : '·'} />
+              <Metric label="Duration" value={run.durationMin != null ? `${Math.round(run.durationMin)} min` : '·'} />
+              <Metric label="Pace" value={run.avgPace || '·'} />
+              <Metric label="Avg HR" value={run.avgHr != null ? `${run.avgHr} bpm` : '·'} />
+              <Metric label="Max HR" value={run.maxHr != null ? `${run.maxHr} bpm` : '·'} />
+              <Metric label="HR source" value={run.hrSource || '·'} accent={run.hrSource != null && run.hrSource !== 'Samsung'} />
             </div>
             {run.hrSource === 'Samsung' && (
               <div className="note note-accent" style={{ marginTop: 12, marginBottom: 0 }}>
-                <span className="msr-fill">info</span>HR from Samsung/Galaxy — least-reliable fallback (Elvanse-inflated); distance from Samsung is never used.
+                <span className="msr-fill">info</span>HR from Samsung/Galaxy: least-reliable fallback (Elvanse-inflated); distance from Samsung is never used.
               </div>
             )}
             {run.notes && <div style={{ fontSize: 12, color: 'var(--text-dim)', marginTop: 12, whiteSpace: 'pre-wrap' }}>{run.notes}</div>}
@@ -130,7 +129,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
                     <div key={si} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 0', borderTop: si === 0 ? 'none' : '1px solid var(--border)' }}>
                       <div style={{ width: 22, flex: 'none', fontSize: 12, fontWeight: 700, color: 'var(--text-faint)' }}>{s.setNo}</div>
                       <div style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}>
-                        {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>—</span> : null}
+                        {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>·</span> : null}
                         {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{s.durationSeconds}s</span>}
                         {s.reps != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> × {s.reps}</span>}
                         {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}</span>}
@@ -149,7 +148,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       )}
 
       {/* Structured cool-down */}
-      <StructuredBlock kind="cooldown" items={session.cooldown} />
+      <StructuredBlock kind="cooldown" raw={session.cooldown} />
 
       <div style={{ height: 20 }} />
     </>

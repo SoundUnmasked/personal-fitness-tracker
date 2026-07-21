@@ -52,7 +52,7 @@ export default async function UnlockPage({
           </div>
         ) : error ? (
           <div className="note note-err" style={{ marginTop: 16, textAlign: 'left' }}>
-            Wrong passphrase — try again.
+            Wrong passphrase. Try again.
           </div>
         ) : null}
 

@@ -51,7 +51,7 @@ export default function CapturePage() {
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.configured === false
-          ? 'Anthropic API key not set yet — add ANTHROPIC_API_KEY to .env, then retry. You can still enter values manually below.'
+          ? 'Anthropic API key not set yet. Add ANTHROPIC_API_KEY to .env, then retry. You can still enter values manually below.'
           : data.error || 'Extraction failed');
       }
       const ex: Extracted = data.extracted;
@@ -106,7 +106,7 @@ export default function CapturePage() {
         <div className="eyebrow eyebrow-accent">CAPTURE</div>
         <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em', marginTop: 8 }}>Add to your log</div>
         <div style={{ fontSize: 13.5, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 8 }}>
-          Snap an InBody scan (Claude reads the numbers), or enter them by hand below. Kept as an accurate checkpoint — separate from the Withings trend, never averaged.
+          Snap an InBody scan (Claude reads the numbers), or enter them by hand below. Kept as an accurate checkpoint, separate from the Withings trend, never averaged.
         </div>
 
         {error && <div className="note note-err" style={{ marginTop: 16 }}>{error}</div>}

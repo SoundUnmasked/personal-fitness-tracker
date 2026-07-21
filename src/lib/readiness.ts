@@ -39,7 +39,7 @@ export function computeReadiness(c: CheckinLike | null | undefined): Readiness {
     return {
       hasData: false,
       score: null,
-      label: '—',
+      label: '·',
       note: 'Check in to set your readiness for today.',
       subjectiveOnly: true,
     };
@@ -60,9 +60,9 @@ export function computeReadiness(c: CheckinLike | null | undefined): Readiness {
     score >= 80 ? 'primed' : score >= 65 ? 'recovered' : score >= 50 ? 'moderate' : 'compromised';
   const note =
     score >= 80
-      ? 'Green light — push your top sets today.'
+      ? 'Green light. Push your top sets today.'
       : score >= 65
-        ? 'Train as planned, leave 1–2 reps in reserve.'
+        ? 'Train as planned, leave 1-2 reps in reserve.'
         : score >= 50
           ? 'Dial back volume or intensity a touch.'
           : 'Consider a lighter session or a recovery day.';

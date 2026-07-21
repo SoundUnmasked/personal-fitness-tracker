@@ -30,7 +30,7 @@ export default async function MetricsPage() {
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>Body weight</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 8 }}>
-              <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: '-0.03em' }}>{latest ? latest.weightKg!.toFixed(1) : '—'}</div>
+              <div style={{ fontSize: 34, fontWeight: 700, letterSpacing: '-0.03em' }}>{latest ? latest.weightKg!.toFixed(1) : '·'}</div>
               <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-dim)' }}>kg</div>
             </div>
           </div>
@@ -47,8 +47,8 @@ export default async function MetricsPage() {
 
       {/* Real metric tiles */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 11, marginTop: 12 }}>
-        <MetricTile icon="percent" label="Body fat" value={latestInbody?.bodyFatPct != null ? latestInbody.bodyFatPct.toFixed(1) : '—'} unit="%" placeholder={latestInbody?.bodyFatPct == null} />
-        <MetricTile icon="fitness_center" label="Muscle mass" value={latestInbody?.skeletalMuscleMassKg != null ? latestInbody.skeletalMuscleMassKg.toFixed(1) : '—'} unit="kg" placeholder={latestInbody?.skeletalMuscleMassKg == null} />
+        <MetricTile icon="percent" label="Body fat" value={latestInbody?.bodyFatPct != null ? latestInbody.bodyFatPct.toFixed(1) : '·'} unit="%" placeholder={latestInbody?.bodyFatPct == null} />
+        <MetricTile icon="fitness_center" label="Muscle mass" value={latestInbody?.skeletalMuscleMassKg != null ? latestInbody.skeletalMuscleMassKg.toFixed(1) : '·'} unit="kg" placeholder={latestInbody?.skeletalMuscleMassKg == null} />
         <MetricTile icon="calendar_month" label="Sessions logged" value={String(d.counts.sessions)} unit="" />
         <MetricTile icon="check_circle" label="Check-ins" value={String(d.counts.checkins)} unit="" />
       </div>
@@ -74,7 +74,7 @@ export default async function MetricsPage() {
             <div key={g.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '13px 15px', borderTop: i === 0 ? 'none' : '1px solid var(--border)' }}>
               <div style={{ fontSize: 14, fontWeight: 600 }}>{g.name}</div>
               <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-dim)' }}>
-                {g.currentValue ?? '—'}{g.targetValue != null ? ` / ${g.targetValue}` : ''}{g.unit ? ` ${g.unit}` : ''}
+                {g.currentValue ?? '·'}{g.targetValue != null ? ` / ${g.targetValue}` : ''}{g.unit ? ` ${g.unit}` : ''}
               </div>
             </div>
           ))}
