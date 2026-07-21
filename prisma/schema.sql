@@ -21,6 +21,7 @@ CREATE TABLE "sessions" (
     "energy_pre" INTEGER,
     "rpe_overall" INTEGER,
     "cooldown_done" BOOLEAN NOT NULL DEFAULT false,
+    "warmup_done" BOOLEAN NOT NULL DEFAULT false,
     "warmup" TEXT,
     "cooldown" TEXT,
     "source" TEXT NOT NULL DEFAULT 'manual',

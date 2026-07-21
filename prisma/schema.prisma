@@ -58,6 +58,7 @@ model Session {
   energyPre    Int?      @map("energy_pre") // 1-5
   rpeOverall   Int?      @map("rpe_overall") // 1-10
   cooldownDone Boolean   @default(false) @map("cooldown_done") // 10-min cooldown (Foundation)
+  warmupDone   Boolean   @default(false) @map("warmup_done") // warm-up block ticked in the logger
   // Structured warm-up / cool-down text (previously squeezed into `notes`).
   // Free-form prose; rendered as their own collapsible blocks in the session view.
   warmup       String? // planned warm-up routine (text)
