@@ -426,6 +426,10 @@ textarea { resize: vertical; min-height: 42px; line-height: 1.4; }
 .muted { color: var(--text-faint); font-weight: 400; font-size: 12px; }
 .setting-row:first-child { border-top: none !important; }
 
+/* "Session in progress" mini-bar live dot */
+@keyframes pft-live-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.7); } }
+.pft-live-dot { animation: pft-live-pulse 1.6s ease-in-out infinite; }
+
 /* Collapsible warm-up / cool-down blocks (native <details>) */
 details > summary { list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
