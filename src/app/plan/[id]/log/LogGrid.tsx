@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
+import { beep, unlockAudio } from '@/lib/beeper';
+import { parseTempo, tempoAt } from '@/lib/tempo';
 
 export interface LogExercise {
   name: string;
@@ -82,38 +84,52 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
 
-  function beep() {
-    try {
-      const AC = (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-      const ac = new AC();
-      const o = ac.createOscillator();
-      const g = ac.createGain();
-      o.frequency.value = 760; o.connect(g); g.connect(ac.destination);
-      g.gain.setValueAtTime(0.0001, ac.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.2, ac.currentTime + 0.01);
-      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + 0.25);
-      o.start(); o.stop(ac.currentTime + 0.26);
-    } catch { /* audio not available */ }
-  }
+  // Rest countdown against an absolute deadline (Date.now()-based) rather than
+  // chained 1s decrements: mobile Chrome throttles background timers, and a
+  // deadline recomputed on every tick stays correct however late ticks arrive.
+  const restEndsAt = useRef<number | null>(null);
 
   function startRest(sec: number) {
     if (restTimer.current) clearInterval(restTimer.current);
+    // Every path here starts from a tap, which is our chance to unlock audio
+    // for the end-of-rest tone (mobile Chrome autoplay policy).
+    unlockAudio();
     setPanel('rest');
     setRest({ running: true, remaining: sec, total: sec });
+    restEndsAt.current = Date.now() + sec * 1000;
     restTimer.current = setInterval(() => {
-      setRest((r) => {
-        const rem = r.remaining - 1;
-        if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); beep(); return { ...r, remaining: 0, running: false }; }
-        return { ...r, remaining: rem };
-      });
-    }, 1000);
+      const endsAt = restEndsAt.current;
+      if (endsAt == null) return;
+      const rem = Math.ceil((endsAt - Date.now()) / 1000);
+      if (rem <= 0) {
+        if (restTimer.current) clearInterval(restTimer.current);
+        restEndsAt.current = null;
+        beep('end');
+        setRest((r) => ({ ...r, remaining: 0, running: false }));
+      } else {
+        setRest((r) => (r.remaining === rem ? r : { ...r, remaining: rem }));
+      }
+    }, 250);
   }
-  function restAdjust(d: number) { setRest((r) => ({ ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) })); }
+  function restAdjust(d: number) {
+    if (restEndsAt.current != null) {
+      restEndsAt.current = Math.max(Date.now(), restEndsAt.current + d * 1000);
+    }
+    setRest((r) => { const rem = Math.max(0, r.remaining + d); return { ...r, remaining: rem, total: Math.max(r.total, rem) }; });
+  }
   function restToggle() {
-    if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
-    else startRest(rest.remaining > 0 ? rest.remaining : restFor(active.ei));
+    if (rest.running) {
+      if (restTimer.current) clearInterval(restTimer.current);
+      restEndsAt.current = null;
+      setRest((r) => ({ ...r, running: false }));
+    } else startRest(rest.remaining > 0 ? rest.remaining : restFor(active.ei));
   }
-  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
+  function restSkip() {
+    if (restTimer.current) clearInterval(restTimer.current);
+    restEndsAt.current = null;
+    setRest((r) => ({ ...r, running: false }));
+    setPanel('entry');
+  }
 
   // --- duration count-up ----------------------------------------------------
   function writeField(ei: number, si: number, field: Field, value: string) {
@@ -150,10 +166,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     })));
   }
   function toggle(ei: number, si: number) {
-    let nowDone = false;
-    setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
-      if (s !== si) return row; nowDone = !row.done; return { ...row, done: nowDone };
-    })));
+    // Decide from current state, NOT inside the setSets updater: React may run
+    // updaters lazily, so a flag mutated in there is not reliably visible on
+    // the next line (live-use bug: tick sometimes failed to start the rest
+    // timer). Ticking a set done always auto-starts that exercise's rest.
+    const nowDone = !sets[ei][si].done;
+    setSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => (s === si ? { ...row, done: nowDone } : row))));
     if (nowDone) startRest(restFor(ei));
   }
   function next() {
@@ -360,7 +378,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </button>
               </div>
             ) : (
-              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} beep={beep} /> : null
+              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} /> : null
             )}
           </>
         )}
@@ -392,83 +410,118 @@ function Cell({ active, filled, value, onClick }: { active: boolean; filled: boo
 }
 
 // --- Tempo metronome ---------------------------------------------------------
-interface TempoPhase { label: string; sec: number; }
-function parseTempo(tempo: string): TempoPhase[] {
-  // Standard notation, up to 4 digits: eccentric(lower) / pause(bottom) /
-  // concentric(raise) / pause(top). "X" = explosive (treated as ~1s).
-  const labels = ['Lower', 'Bottom', 'Raise', 'Top'];
-  const out: TempoPhase[] = [];
-  tempo.toUpperCase().slice(0, 4).split('').forEach((c, i) => {
-    const sec = c === 'X' ? 1 : Number(c);
-    if (!Number.isFinite(sec) || sec <= 0) return; // skip 0-second phases
-    out.push({ label: c === 'X' && i === 2 ? 'Explode' : labels[i], sec });
-  });
-  return out;
-}
-
-function TempoPlayer({ tempo, beep }: { tempo: string; beep: () => void }) {
+// Driven by requestAnimationFrame against performance.now(): every frame
+// recomputes the exact position from absolute elapsed time (tempoAt), so
+// phases can neither drift nor be skipped — the session-18 glitch came from
+// chaining 1s setInterval decrements, which mobile Chrome throttles. Audio
+// goes through the shared beeper (one AudioContext, fresh nodes per tone).
+function TempoPlayer({ tempo }: { tempo: string }) {
   const phases = useMemo(() => parseTempo(tempo), [tempo]);
-  const initial = phases[0]?.sec ?? 0;
   const [running, setRunning] = useState(false);
-  const [st, setSt] = useState({ pi: 0, remaining: initial, rep: 0 });
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [view, setView] = useState(() => ({ pi: 0, display: phases[0]?.sec ?? 0, rep: 0 }));
+  const raf = useRef<number | null>(null);
+  const startedAt = useRef(0); // performance.now() when the current run began
+  const pausedElapsed = useRef(0); // seconds accumulated across earlier runs
+  const lastCue = useRef<{ rep: number; pi: number } | null>(null);
+  const wakeLock = useRef<WakeLockSentinel | null>(null);
 
-  useEffect(() => () => { if (timer.current) clearInterval(timer.current); }, []);
+  const stopLoop = useCallback(() => {
+    if (raf.current != null) cancelAnimationFrame(raf.current);
+    raf.current = null;
+  }, []);
+
+  const frame = useCallback(() => {
+    const elapsed = pausedElapsed.current + (performance.now() - startedAt.current) / 1000;
+    const pos = tempoAt(phases, elapsed);
+    // Cue once per phase entry: haptic + click, higher pitch on a new rep.
+    // Keyed on (rep, pi) so a phase crossed while the tab was throttled cues
+    // exactly once on the frame we land in it, never twice.
+    const last = lastCue.current;
+    if (!last || last.rep !== pos.rep || last.pi !== pos.pi) {
+      lastCue.current = { rep: pos.rep, pi: pos.pi };
+      try { navigator.vibrate?.(pos.pi === 0 ? [70, 40, 70] : 45); } catch { /* no haptics */ }
+      beep(pos.pi === 0 ? 'cycle' : 'phase');
+    }
+    // Only re-render when a displayed value actually changes; rendering at
+    // frame rate is what made the countdown look jittery.
+    setView((v) => (v.pi === pos.pi && v.display === pos.display && v.rep === pos.rep ? v : { pi: pos.pi, display: pos.display, rep: pos.rep }));
+    raf.current = requestAnimationFrame(frame);
+  }, [phases]);
+
+  // Keep the screen awake while the metronome runs: with the screen off,
+  // Chrome freezes rAF and suspends audio, so cues would stop. The lock
+  // auto-releases when the page hides; re-acquire when we come back.
+  useEffect(() => {
+    if (!running) return;
+    let cancelled = false;
+    const acquire = async () => {
+      try {
+        const lock = (await navigator.wakeLock?.request('screen')) ?? null;
+        if (cancelled) { void lock?.release().catch(() => {}); return; }
+        wakeLock.current = lock;
+      } catch { wakeLock.current = null; /* unsupported or denied: timer still correct, cues resume on return */ }
+    };
+    void acquire();
+    const onVisible = () => { if (document.visibilityState === 'visible') void acquire(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      void wakeLock.current?.release().catch(() => {});
+      wakeLock.current = null;
+    };
+  }, [running]);
+
+  useEffect(() => () => stopLoop(), [stopLoop]);
   // Reset when the movement (tempo) changes.
   useEffect(() => {
     setRunning(false);
-    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
-    if (timer.current) clearInterval(timer.current);
-  }, [tempo, phases]);
-  // Cue phase changes (vibrate + click) while running.
-  useEffect(() => {
-    if (!running) return;
-    try { navigator.vibrate?.(st.pi === 0 ? [70, 40, 70] : 45); } catch { /* no haptics */ }
-    beep();
-  }, [st.pi, running, beep]);
+    stopLoop();
+    pausedElapsed.current = 0;
+    lastCue.current = null;
+    setView({ pi: 0, display: phases[0]?.sec ?? 0, rep: 0 });
+  }, [tempo, phases, stopLoop]);
 
   function toggle() {
     if (running) {
+      pausedElapsed.current += (performance.now() - startedAt.current) / 1000;
       setRunning(false);
-      if (timer.current) clearInterval(timer.current);
+      stopLoop();
     } else {
       if (!phases.length) return;
+      unlockAudio(); // user gesture: create/resume the shared AudioContext
+      startedAt.current = performance.now();
       setRunning(true);
-      timer.current = setInterval(() => {
-        setSt((s) => {
-          if (s.remaining > 1) return { ...s, remaining: s.remaining - 1 };
-          let np = s.pi + 1;
-          let rep = s.rep;
-          if (np >= phases.length) { np = 0; rep = s.rep + 1; }
-          return { pi: np, remaining: phases[np]?.sec ?? 0, rep };
-        });
-      }, 1000);
+      stopLoop();
+      raf.current = requestAnimationFrame(frame);
     }
   }
   function reset() {
     setRunning(false);
-    if (timer.current) clearInterval(timer.current);
-    setSt({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+    stopLoop();
+    pausedElapsed.current = 0;
+    lastCue.current = null;
+    setView({ pi: 0, display: phases[0]?.sec ?? 0, rep: 0 });
   }
 
   if (!phases.length) {
     return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
   }
-  const cur = phases[st.pi];
+  const cur = phases[view.pi] ?? phases[0];
 
   return (
     <div style={{ padding: '2px 2px 4px' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>TEMPO · {tempo}</div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Rep {st.rep + 1}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Rep {view.rep + 1}</div>
       </div>
       <div style={{ textAlign: 'center', margin: '8px 0 12px' }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? cur.label : 'Ready'}</div>
-        <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? st.remaining : phases[0].sec}</div>
+        <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? view.display : phases[0].sec}</div>
       </div>
       <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
         {phases.map((p, i) => (
-          <div key={i} style={{ flex: p.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === st.pi ? 'var(--accent)' : 'var(--seg-track)', color: running && i === st.pi ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
+          <div key={i} style={{ flex: p.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === view.pi ? 'var(--accent)' : 'var(--seg-track)', color: running && i === view.pi ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.label}</div>
             <div style={{ fontSize: 13, fontWeight: 700 }}>{p.sec}s</div>
           </div>
