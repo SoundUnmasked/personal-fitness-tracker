@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import BottomNav from '@/components/BottomNav';
 import SWRegister from '@/components/SWRegister';
+import SessionBar from '@/components/SessionBar';
 
 export const metadata: Metadata = {
   title: 'Personal Fitness Tracker',
@@ -52,6 +53,7 @@ export default function RootLayout({
       </head>
       <body>
         <main className="app" id="app-shell">{children}</main>
+        <SessionBar />
         <BottomNav />
         <SWRegister />
       </body>

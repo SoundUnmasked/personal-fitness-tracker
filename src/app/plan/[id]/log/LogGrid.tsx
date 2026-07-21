@@ -4,16 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { completePlanAction, setSessionFlagsAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
+import {
+  saveDraft as saveSessionDraft,
+  readDraft as readSessionDraft,
+  clearDraft as clearSessionDraft,
+  requestPersistentStorage,
+  type SessionDraft,
+} from '@/lib/sessionDraft';
 
 // ---------------------------------------------------------------------------
-// Audio cues (rest end + tempo metronome).
+// Audio cues (rest timer + tempo metronome).
 //
-// ONE shared AudioContext for the whole logger. Mobile Chrome caps the number
-// of live AudioContexts (~6) and silently refuses new ones past the limit — the
-// old code made a fresh context per beep, so sound died after a handful of cues.
-// Here we keep a single context, resume it on a user gesture (autoplay policy),
-// and spin up a fresh short-lived oscillator+gain per cue (oscillators are
-// one-shot and can't be restarted).
+// ONE shared AudioContext for the whole logger. Mobile Chrome caps live
+// AudioContexts (~6) and silently refuses new ones past the limit, so we keep a
+// single context, resume it on a user gesture (autoplay policy), and spin up a
+// fresh short-lived oscillator+gain per cue (oscillators are one-shot).
 // ---------------------------------------------------------------------------
 let sharedAudioCtx: AudioContext | null = null;
 function getAudioCtx(): AudioContext | null {
@@ -62,6 +67,10 @@ function playTone(freq = 760, durSec = 0.14, peak = 0.22): void {
 function vibrate(pattern: number | number[]): void {
   try { navigator.vibrate?.(pattern); } catch { /* no haptics */ }
 }
+// Strict metronome: every tick is identical (item 1). No vibration in the loop.
+const TICK_FREQ = 880, TICK_DUR = 0.045, TICK_PEAK = 0.2;
+// Rest end-warning tones (item 2a): distinct at T-3 and at zero.
+const REST_WARN_FREQ = 660, REST_END_FREQ = 990;
 
 export interface LogExercise {
   name: string;
@@ -104,6 +113,7 @@ function initSets(ex: LogExercise): SetRow[] {
 
 const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0–10', dur: 'TIME · SEC' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
+const NOTIFY_ASKED = 'pft:notify-asked';
 
 // Field cycle order depends on whether the movement is rep- or time-based.
 const fieldsForStyle = (style: 'reps' | 'duration'): Field[] =>
@@ -111,20 +121,21 @@ const fieldsForStyle = (style: 'reps' | 'duration'): Field[] =>
 
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
-  // Draft key: logged progress is autosaved here on every change so backing out
-  // and returning resumes exactly where you were (item 5).
-  const DRAFT_KEY = `pft:logdraft:v1:${plan.id}`;
 
   const [sets, setSets] = useState<SetRow[][]>(() => plan.exercises.map(initSets));
   const [active, setActive] = useState<{ ei: number; si: number; field: Field }>({ ei: 0, si: 0, field: 'kg' });
-  const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('entry');
+  // Item 3: no keypad on open — the panel starts hidden and only reveals the
+  // keypad once the user taps a cell (tap() sets it to 'entry').
+  const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('hidden');
   const [resumed, setResumed] = useState(false);
   const [paused, setPaused] = useState(false);
+  const [continueMode, setContinueMode] = useState(false); // paused because backed-out → "Continue"
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [editEx, setEditEx] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ ei: number; si: number } | null>(null);
   const [warmupDone, setWarmupDone] = useState(plan.warmupDone);
   const [cooldownDone, setCooldownDone] = useState(plan.cooldownDone);
+  const [notifyAsk, setNotifyAsk] = useState(false);
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
   const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s }; });
@@ -143,29 +154,89 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const activeStyle: 'reps' | 'duration' = activeEx?.setStyle === 'duration' ? 'duration' : 'reps';
   const activeHasTempo = !!activeEx?.tempo;
 
-  // --- draft persistence ----------------------------------------------------
-  const persistDraft = useCallback((next: SetRow[][]) => {
-    try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ v: 1, sets: next })); } catch { /* storage full/blocked */ }
-  }, [DRAFT_KEY]);
-  const clearDraft = useCallback(() => {
-    try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
-  }, [DRAFT_KEY]);
-  // Every set mutation goes through this so the exact next state is saved
-  // synchronously — nothing is lost if the screen is left immediately after.
-  const updateSets = useCallback((updater: (prev: SetRow[][]) => SetRow[][]) => {
-    setSets((prev) => { const next = updater(prev); persistDraft(next); return next; });
-  }, [persistDraft]);
+  // --- draft persistence (item 4) -------------------------------------------
+  // Mirror live state into refs so lifecycle handlers (pagehide / unmount) can
+  // snapshot the FULL session without stale closures.
+  const setsRef = useRef(sets); useEffect(() => { setsRef.current = sets; }, [sets]);
+  const activeRef = useRef(active); useEffect(() => { activeRef.current = active; }, [active]);
+  const elapsedRef = useRef(elapsed); useEffect(() => { elapsedRef.current = elapsed; }, [elapsed]);
+  const pausedRef = useRef(paused); useEffect(() => { pausedRef.current = paused; }, [paused]);
+  const clearedRef = useRef(false); // set once the draft is intentionally cleared (finish)
 
-  // Hydrate any saved draft once, on mount.
+  const buildDraft = useCallback((overrideSets?: SetRow[][], overridePaused?: boolean): SessionDraft => ({
+    v: 2,
+    sessionId: plan.id,
+    title: plan.title,
+    sets: overrideSets ?? setsRef.current,
+    active: activeRef.current,
+    elapsed: elapsedRef.current,
+    paused: overridePaused ?? pausedRef.current,
+    updatedAt: Date.now(),
+  }), [plan.id, plan.title]);
+
+  // Every set mutation saves the full draft synchronously.
+  const updateSets = useCallback((updater: (prev: SetRow[][]) => SetRow[][]) => {
+    setSets((prev) => { const next = updater(prev); saveSessionDraft(buildDraft(next)); return next; });
+  }, [buildDraft]);
+
+  // Hydrate a saved draft once, on mount → restore sets + active + elapsed, and
+  // if it was backed-out (paused) show the "Continue session" state.
   useEffect(() => {
+    requestPersistentStorage();
+    const d = readSessionDraft(plan.id);
+    if (d && Array.isArray(d.sets) && d.sets.length) {
+      setSets(d.sets);
+      if (d.active) setActive(d.active);
+      if (typeof d.elapsed === 'number') setElapsed(d.elapsed);
+      setResumed(true);
+      if (d.paused) { setPaused(true); setContinueMode(true); }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [plan.id]);
+
+  // Save + implicitly pause when the page is hidden or torn down (real back-out
+  // on mobile). visibilitychange/pagehide cover backgrounding & tab discard;
+  // the unmount cleanup covers in-app client-side navigation (the back button).
+  useEffect(() => {
+    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); };
+    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); };
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onPageHide);
+      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, true)); // client-side nav away
+    };
+  }, [buildDraft]);
+
+  // --- screen wake lock (item 2c) -------------------------------------------
+  const wakeRef = useRef<WakeLockSentinel | null>(null);
+  const acquireWake = useCallback(async () => {
     try {
-      const raw = localStorage.getItem(DRAFT_KEY);
-      if (raw) {
-        const d = JSON.parse(raw);
-        if (d && Array.isArray(d.sets) && d.sets.length) { setSets(d.sets); setResumed(true); }
+      if ('wakeLock' in navigator && document.visibilityState === 'visible' && !wakeRef.current) {
+        wakeRef.current = await (navigator as Navigator & { wakeLock: { request: (t: 'screen') => Promise<WakeLockSentinel> } }).wakeLock.request('screen');
+        // eslint-disable-next-line no-console
+        console.log('[wakelock] acquired');
+        wakeRef.current.addEventListener?.('release', () => { console.log('[wakelock] released (by system)'); wakeRef.current = null; });
       }
-    } catch { /* ignore */ }
-  }, [DRAFT_KEY]);
+    } catch { /* unsupported / denied — fail silently */ }
+  }, []);
+  const releaseWake = useCallback(async () => {
+    try { if (wakeRef.current) { await wakeRef.current.release(); wakeRef.current = null; console.log('[wakelock] released'); } }
+    catch { /* ignore */ }
+  }, []);
+
+  // Hold the wake lock while the session is active and not paused; drop it when
+  // paused. Re-acquire when the tab becomes visible again (the OS drops it on hide).
+  useEffect(() => {
+    if (!paused && !finishing) acquireWake(); else releaseWake();
+    return () => { releaseWake(); };
+  }, [paused, finishing, acquireWake, releaseWake]);
+  useEffect(() => {
+    const onVis = () => { if (document.visibilityState === 'visible' && !pausedRef.current && !finishing) acquireWake(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [acquireWake, finishing]);
 
   // session elapsed clock — frozen while paused
   useEffect(() => {
@@ -176,12 +247,65 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   useEffect(() => () => {
     if (restTimer.current) clearInterval(restTimer.current);
     if (swTimer.current) clearInterval(swTimer.current);
+    cancelRestNotification();
   }, []);
-  // If we switch to a movement without a tempo while the Tempo panel is open,
-  // fall back to the keypad.
   useEffect(() => { if (panel === 'tempo' && !activeHasTempo) setPanel('entry'); }, [active.ei, activeHasTempo, panel]);
 
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
+
+  // --- rest-end notifications (item 2b) -------------------------------------
+  const restNotifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function cancelRestNotification() {
+    if (restNotifyTimer.current) { clearTimeout(restNotifyTimer.current); restNotifyTimer.current = null; }
+    try {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready
+          .then((reg) => reg.getNotifications({ tag: 'pft-rest' }).then((ns) => ns.forEach((n) => n.close())).catch(() => {}))
+          .catch(() => {});
+      }
+    } catch { /* ignore */ }
+  }
+  function scheduleRestNotification(seconds: number) {
+    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+    cancelRestNotification();
+    const title = 'Rest complete';
+    const opts = { body: 'Time for your next set.', tag: 'pft-rest', icon: '/icons/icon-192.png' };
+    // Prefer an OS-scheduled trigger (fires even if the app is backgrounded/
+    // closed) where supported; otherwise a setTimeout (foreground / wake-locked).
+    const hasTrigger = 'TimestampTrigger' in window && 'serviceWorker' in navigator;
+    if (hasTrigger) {
+      navigator.serviceWorker.ready.then((reg) => {
+        try {
+          // @ts-expect-error — Notification Triggers is experimental
+          reg.showNotification(title, { ...opts, showTrigger: new window.TimestampTrigger(Date.now() + seconds * 1000) }).catch(() => {});
+        } catch { /* fall through to timeout below */ }
+      }).catch(() => {});
+    } else {
+      restNotifyTimer.current = setTimeout(() => { try { new Notification(title, opts); } catch { /* ignore */ } }, seconds * 1000);
+    }
+  }
+  // Ask for permission gracefully (once) the first time a rest starts.
+  function maybeAskNotify() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+    if (Notification.permission === 'default') {
+      let asked = false;
+      try { asked = localStorage.getItem(NOTIFY_ASKED) === '1'; } catch { /* ignore */ }
+      if (!asked) setNotifyAsk(true);
+    }
+  }
+  function enableNotifications() {
+    setNotifyAsk(false);
+    try { localStorage.setItem(NOTIFY_ASKED, '1'); } catch { /* ignore */ }
+    if ('Notification' in window) {
+      Notification.requestPermission().then((perm) => {
+        if (perm === 'granted' && rest.running && rest.remaining > 0) scheduleRestNotification(rest.remaining);
+      }).catch(() => {});
+    }
+  }
+  function dismissNotifyAsk() {
+    setNotifyAsk(false);
+    try { localStorage.setItem(NOTIFY_ASKED, '1'); } catch { /* ignore */ }
+  }
 
   // --- rest timer -----------------------------------------------------------
   function runRestInterval() {
@@ -189,7 +313,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     restTimer.current = setInterval(() => {
       setRest((r) => {
         const rem = r.remaining - 1;
-        if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); playTone(760); vibrate(60); return { ...r, remaining: 0, running: false }; }
+        if (rem === 3) { playTone(REST_WARN_FREQ, 0.12, 0.22); vibrate(35); } // T-3 warning
+        if (rem <= 0) {
+          if (restTimer.current) clearInterval(restTimer.current);
+          playTone(REST_END_FREQ, 0.34, 0.3); vibrate([80, 40, 80]);          // distinct final beep
+          cancelRestNotification(); // we're in the foreground — no need for the system alert
+          return { ...r, remaining: 0, running: false };
+        }
         return { ...r, remaining: rem };
       });
     }, 1000);
@@ -198,36 +328,41 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setPanel('rest');
     setRest({ running: true, remaining: sec, total: sec });
     runRestInterval();
+    maybeAskNotify();
+    scheduleRestNotification(sec);
   }
-  function restAdjust(d: number) { setRest((r) => ({ ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) })); }
+  function restAdjust(d: number) {
+    setRest((r) => { const next = { ...r, remaining: Math.max(0, r.remaining + d), total: Math.max(r.total, r.remaining + d) }; if (next.running) scheduleRestNotification(next.remaining); return next; });
+  }
   function restToggle() {
-    unlockAudio(); // gesture — prime audio so the rest-end tone can play
-    if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
-    else { setRest((r) => ({ ...r, running: true, remaining: r.remaining > 0 ? r.remaining : restFor(active.ei), total: r.remaining > 0 ? r.total : restFor(active.ei) })); runRestInterval(); }
+    unlockAudio();
+    if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); }
+    else { const sec = rest.remaining > 0 ? rest.remaining : restFor(active.ei); setRest((r) => ({ ...r, running: true, remaining: sec, total: Math.max(r.total, sec) })); runRestInterval(); maybeAskNotify(); scheduleRestNotification(sec); }
   }
-  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
+  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
-  // --- pause / resume / restart (item 5) ------------------------------------
+  // --- pause / resume / restart (items 4/5) ---------------------------------
   function pauseSession() {
     unlockAudio();
     restWasRunning.current = rest.running;
-    if (rest.running && restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; setRest((r) => ({ ...r, running: false })); }
+    if (rest.running && restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; cancelRestNotification(); setRest((r) => ({ ...r, running: false })); }
     swWasRunning.current = sw.running;
     if (sw.running && swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; setSw((s) => ({ ...s, running: false })); }
     setPaused(true);
+    saveSessionDraft(buildDraft(undefined, true));
   }
   function resumeSession() {
-    setPaused(false);
+    setPaused(false); setContinueMode(false);
     if (restWasRunning.current) { setRest((r) => ({ ...r, running: true })); runRestInterval(); }
     if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
+    saveSessionDraft(buildDraft(undefined, false));
   }
   function restartSession() {
-    clearDraft();
     const fresh = plan.exercises.map(initSets);
     setSets(fresh);
-    persistDraft(fresh);
     setActive({ ei: 0, si: 0, field: 'kg' });
     if (restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; }
+    cancelRestNotification();
     const s0 = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS;
     setRest({ running: false, remaining: s0, total: s0 });
     if (swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; }
@@ -235,9 +370,11 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     setElapsed(0);
     setResumed(false);
     setEditEx(null);
-    setPanel('entry');
+    setPanel('hidden');
     setConfirmRestart(false);
-    setPaused(false);
+    setPaused(false); setContinueMode(false);
+    // Session continues (still in progress), just cleared — keep a fresh draft.
+    saveSessionDraft({ v: 2, sessionId: plan.id, title: plan.title, sets: fresh, active: { ei: 0, si: 0, field: 'kg' }, elapsed: 0, paused: false, updatedAt: Date.now() });
   }
 
   // --- duration count-up ----------------------------------------------------
@@ -275,21 +412,22 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     })));
   }
   function toggle(ei: number, si: number) {
-    unlockAudio(); // tap is a user gesture — unlock audio for later cues
-    let nowDone = false;
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => {
-      if (s !== si) return row; nowDone = !row.done; return { ...row, done: nowDone };
-    })));
-    // Issue 8: ticking a set done auto-starts THIS exercise's rest timer
-    // (its restSeconds, 90s fallback) — no separate tap. Un-ticking does not.
+    unlockAudio();
+    // Compute the target state from the CURRENT render's state — not from a
+    // variable mutated inside the setState updater. React doesn't guarantee the
+    // updater runs synchronously (it depends on other pending updates, e.g. the
+    // per-second clock), so reading it back on the next line was unreliable and
+    // could skip the rest-timer auto-start (issue 8).
+    const nowDone = !(sets[ei]?.[si]?.done ?? false);
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, done: nowDone } : row)));
+    // Issue 8: ticking a set done auto-starts THIS exercise's rest timer.
     if (nowDone) startRest(restFor(ei));
   }
   function next() {
-    unlockAudio(); // gesture
+    unlockAudio();
     const order = fieldsForStyle(activeStyle);
     const idx = order.indexOf(active.field);
     if (idx > -1 && idx < order.length - 1) { setActive({ ...active, field: order[idx + 1] }); return; }
-    // mark done + advance
     updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((row, s) => s === active.si ? { ...row, done: true } : row)));
     const exSets = sets[active.ei];
     let na = active;
@@ -300,8 +438,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
   const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, { kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '' }] : rows));
 
-  // Delete a set row: drops its actuals (item 1). Reached via edit-mode trash
-  // button or a left-swipe on the row, both confirmed first.
   function deleteSet(ei: number, si: number) {
     const preLen = sets[ei]?.length ?? 0;
     updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.filter((_, s) => s !== si)));
@@ -313,7 +449,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     });
   }
 
-  // Left-swipe on a row → delete confirm (a plain, scroll-safe touch gesture).
   const touchRef = useRef<{ x: number; y: number; ei: number; si: number } | null>(null);
   function rowTouchStart(e: React.TouchEvent, ei: number, si: number) {
     const t = e.touches[0]; touchRef.current = { x: t.clientX, y: t.clientY, ei, si };
@@ -326,7 +461,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (dx <= -50 && Math.abs(dx) > Math.abs(dy) * 1.5) setDeleteTarget({ ei: p.ei, si: p.si });
   }
 
-  // --- warm-up / cool-down done ticks (item 3) ------------------------------
+  function finishNow() { clearedRef.current = true; clearSessionDraft(plan.id); releaseWake(); cancelRestNotification(); router.push('/'); }
   function toggleWarmup() { const v = !warmupDone; setWarmupDone(v); setSessionFlagsAction(plan.id, { warmupDone: v }); }
   function toggleCooldown() { const v = !cooldownDone; setCooldownDone(v); setSessionFlagsAction(plan.id, { cooldownDone: v }); }
 
@@ -336,8 +471,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
   const activeLen = sets[active.ei]?.length ?? 0;
 
-  // Last column holds the set-done toggle — 44px so the most-tapped control
-  // in the gym meets the minimum comfortable touch-target size.
   const cols = '30px 56px 1fr 1fr 1fr 44px';
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
 
@@ -356,14 +489,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>Finish</button>
       </div>
 
-      {resumed && (
+      {resumed && !paused && (
         <div className="note note-accent" style={{ marginBottom: 10 }}>
           <span className="msr-fill" aria-hidden="true">restore</span>
-          Resumed your in-progress session. Your logged sets are saved as you go.
+          Continuing your session — logged sets restored, saved as you go.
         </div>
       )}
 
-      {/* Structured warm-up (top) — a block, never set rows (item 3) */}
       {plan.warmup && <FlowBlock kind="warmup" text={plan.warmup} done={warmupDone} onToggle={toggleWarmup} />}
 
       {/* Exercise cards */}
@@ -400,7 +532,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     </div>
                   </div>
 
-                  {/* per-exercise rest / tempo / style pills */}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
                     <span style={pillStyle}><span className="msr" style={{ fontSize: 13 }} aria-hidden="true">timer</span>Rest {mmss(ex.restSeconds ?? DEFAULT_REST_SECONDS)}</span>
                     {ex.tempo && (
@@ -413,7 +544,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     )}
                   </div>
 
-                  {/* grid head */}
                   <div style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', margin: '14px 0 2px' }}>
                     {['SET', 'PREV', 'KG', midLabel, 'RPE'].map((h, hi) => (
                       <div key={h} style={{ fontSize: 9.5, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--text-faint)', textAlign: hi >= 2 ? 'center' : 'left' }}>{h}</div>
@@ -432,7 +562,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       onTouchStart={(e) => rowTouchStart(e, index, si)}
                       onTouchEnd={rowTouchEnd}
                       style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
-                      {/* SET number — prominent at a glance (item 2) */}
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: st.done ? 'var(--on-accent)' : rowActive ? 'var(--accent)' : 'var(--text)', background: st.done ? 'var(--accent)' : rowActive ? 'var(--accent-soft)' : 'transparent' }}>{si + 1}</div>
                       </div>
@@ -486,12 +615,23 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           </div>
         ))}
 
-        {/* Structured cool-down (bottom) — a block, never set rows (item 3) */}
         {plan.cooldown && <FlowBlock kind="cooldown" text={plan.cooldown} done={cooldownDone} onToggle={toggleCooldown} />}
       </div>
 
       {/* Bottom entry panel */}
       <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40, maxWidth: 460, margin: '0 auto', padding: '10px 16px calc(22px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', borderTop: '1px solid var(--border)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)' }}>
+        {notifyAsk && (
+          <div className="note note-accent" style={{ marginBottom: 10 }}>
+            <span className="msr-fill" aria-hidden="true">notifications_active</span>
+            <div style={{ flex: 1 }}>
+              Allow notifications so your rest timer can alert you even if the screen is off.
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button onClick={enableNotifications} className="btn-sm" style={{ background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', height: 34 }}>Enable</button>
+                <button onClick={dismissNotifyAsk} className="btn-sm" style={{ background: 'var(--surface)', color: 'var(--text-dim)', border: '1px solid var(--border)', height: 34 }}>Not now</button>
+              </div>
+            </div>
+          </div>
+        )}
         {panel === 'hidden' ? (
           <div style={{ height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setPanel('entry')}>
             <div style={{ width: 34, height: 4, borderRadius: 3, background: 'var(--border)' }} />
@@ -568,18 +708,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         )}
       </div>
 
-      {/* Paused overlay (item 5) */}
+      {/* Paused / Continue overlay (items 4/5) */}
       {paused && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>PAUSED</div>
+          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>{continueMode ? 'SESSION IN PROGRESS' : 'PAUSED'}</div>
           <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{mmss(elapsed)}</div>
           <div style={{ fontSize: 12.5, color: 'var(--text-dim)', textAlign: 'center', maxWidth: 260 }}>{doneCount} of {totalCount} sets logged · saved automatically</div>
-          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>Resume session</button>
+          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>{continueMode ? 'Continue session' : 'Resume session'}</button>
           <button onClick={() => setConfirmRestart(true)} style={{ ...restSmBtn, maxWidth: 300, width: '100%', flex: 'none', height: 48, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>Restart — clear progress</button>
         </div>
       )}
 
-      {/* Delete-set confirm (item 1) */}
       {deleteTarget && (
         <ConfirmDialog
           icon="delete"
@@ -592,7 +731,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         />
       )}
 
-      {/* Restart confirm (item 5) */}
       {confirmRestart && (
         <ConfirmDialog
           icon="restart_alt"
@@ -611,7 +749,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           sets={sets}
           progress={`${doneCount}/${totalCount}`}
           onClose={() => setFinishing(false)}
-          onSaved={() => { clearDraft(); router.push('/'); }}
+          onSaved={finishNow}
         />
       )}
     </>
@@ -630,7 +768,6 @@ function Cell({ active, filled, value, onClick }: { active: boolean; filled: boo
   return <button type="button" style={style} onClick={onClick}>{value !== '' ? value : active ? '' : '–'}</button>;
 }
 
-// --- Reusable confirm dialog -------------------------------------------------
 function ConfirmDialog({ icon, title, body, confirmLabel, danger, onCancel, onConfirm }: {
   icon: string; title: string; body: string; confirmLabel: string; danger?: boolean; onCancel: () => void; onConfirm: () => void;
 }) {
@@ -651,7 +788,6 @@ function ConfirmDialog({ icon, title, body, confirmLabel, danger, onCancel, onCo
   );
 }
 
-// --- Warm-up / cool-down block in the logging flow (item 3) ------------------
 function FlowBlock({ kind, text, done, onToggle }: { kind: 'warmup' | 'cooldown'; text: string; done: boolean; onToggle: () => void }) {
   const [open, setOpen] = useState(true);
   const isWarm = kind === 'warmup';
@@ -680,53 +816,36 @@ function FlowBlock({ kind, text, done, onToggle }: { kind: 'warmup' | 'cooldown'
 // --- Tempo metronome ---------------------------------------------------------
 interface TempoPhase { label: string; sec: number; }
 function parseTempo(tempo: string): TempoPhase[] {
-  // Standard notation, up to 4 digits: eccentric(lower) / pause(bottom) /
-  // concentric(raise) / pause(top). "X" = explosive (treated as ~1s).
   const labels = ['Lower', 'Bottom', 'Raise', 'Top'];
   const out: TempoPhase[] = [];
   tempo.toUpperCase().slice(0, 4).split('').forEach((c, i) => {
     const sec = c === 'X' ? 1 : Number(c);
-    if (!Number.isFinite(sec) || sec <= 0) return; // skip 0-second phases
+    if (!Number.isFinite(sec) || sec <= 0) return;
     out.push({ label: c === 'X' && i === 2 ? 'Explode' : labels[i], sec });
   });
   return out;
-}
-// Distinct tone per phase kind: high on the lift, low on the way down, mid on a hold.
-function phaseFreq(label: string): number {
-  if (label === 'Lower') return 440;
-  if (label === 'Raise' || label === 'Explode') return 990;
-  return 700; // Bottom / Top holds
 }
 
 interface TempoDisp { pi: number; remaining: number; rep: number }
 
 function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
   const phases = useMemo(() => parseTempo(tempo), [tempo]);
-  // Cumulative phase-end boundaries (seconds) and the full cycle length.
-  const bounds = useMemo(() => {
-    let acc = 0;
-    return phases.map((p) => (acc += p.sec));
-  }, [phases]);
+  const bounds = useMemo(() => { let acc = 0; return phases.map((p) => (acc += p.sec)); }, [phases]);
   const cycle = bounds.length ? bounds[bounds.length - 1] : 0;
 
   const [running, setRunning] = useState(false);
   const [disp, setDisp] = useState<TempoDisp>({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
 
   const rafRef = useRef<number | null>(null);
-  const startedAtRef = useRef(0); // performance.now() when the current run segment began
-  const accumRef = useRef(0);     // ms of run time banked across pauses
-  const lastSecondRef = useRef(-1); // last whole-second index that ticked
-  const lastPhaseRef = useRef(-1);  // global phase index at the last tick
+  const startedAtRef = useRef(0);
+  const accumRef = useRef(0);
+  const lastSecondRef = useRef(-1);
 
-  const stopRaf = () => {
-    if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
-  };
+  const stopRaf = () => { if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } };
 
-  // A single absolute-timestamp loop. Phase, remaining and rep are DERIVED from
-  // elapsed time on every frame (compared against performance.now()), so nothing
-  // drifts. The metronome ticks once EVERY whole second (item 4): a distinct
-  // pitch on the second a phase begins (high on the lift, low on the lower),
-  // and a soft tick on the seconds in between. No vibration in this loop.
+  // Absolute-timestamp rAF engine (kept exactly as-is). Item 1: the metronome
+  // fires ONE IDENTICAL tick every whole second — same pitch, same volume, like
+  // a real metronome. No pitch change on phase boundaries. No vibration.
   const frame = useCallback(() => {
     if (!cycle) return;
     const elapsed = (accumRef.current + (performance.now() - startedAtRef.current)) / 1000;
@@ -735,29 +854,21 @@ function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
     let pi = 0;
     while (pi < bounds.length - 1 && within >= bounds[pi]) pi++;
     const remaining = Math.max(0, bounds[pi] - within);
-    const globalPhase = rep * phases.length + pi;
 
     const secondIndex = Math.floor(elapsed + 1e-6);
     if (secondIndex !== lastSecondRef.current) {
       lastSecondRef.current = secondIndex;
-      const phaseStart = globalPhase !== lastPhaseRef.current;
-      lastPhaseRef.current = globalPhase;
-      if (phaseStart) playTone(phaseFreq(phases[pi].label), 0.11, 0.28);
-      else playTone(620, 0.05, 0.14); // soft in-phase tick
+      playTone(TICK_FREQ, TICK_DUR, TICK_PEAK); // identical every second
     }
 
     const remCeil = Math.max(0, Math.ceil(remaining - 1e-6));
-    setDisp((prev) =>
-      prev.pi === pi && prev.rep === rep && prev.remaining === remCeil
-        ? prev
-        : { pi, remaining: remCeil, rep },
-    );
+    setDisp((prev) => (prev.pi === pi && prev.rep === rep && prev.remaining === remCeil) ? prev : { pi, remaining: remCeil, rep });
     rafRef.current = requestAnimationFrame(frame);
-  }, [bounds, cycle, phases]);
+  }, [bounds, cycle]);
 
   const start = useCallback(() => {
     if (!phases.length) return;
-    unlockAudio(); // this Start press is the user gesture that enables audio
+    unlockAudio();
     startedAtRef.current = performance.now();
     setRunning(true);
     stopRaf();
@@ -775,14 +886,11 @@ function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
     setRunning(false);
     accumRef.current = 0;
     lastSecondRef.current = -1;
-    lastPhaseRef.current = -1;
     setDisp({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
   }, [phases]);
 
-  // Reset when the movement (tempo) changes, and clean up on unmount.
   useEffect(() => { reset(); }, [tempo, reset]);
   useEffect(() => () => stopRaf(), []);
-  // Freeze when the whole session is paused.
   useEffect(() => { if (frozen && running) pause(); }, [frozen, running, pause]);
 
   if (!phases.length) {
@@ -815,7 +923,7 @@ function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
           <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
         </button>
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Ticks every second · higher tone on the lift, lower on the way down</div>
+      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Steady metronome — one tick every second</div>
     </div>
   );
 }
@@ -851,8 +959,6 @@ function FinishSheet({ plan, sets, progress, onClose, onSaved }: {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
 
-  // The structured cool-down block owns cooldownDone when there IS cool-down
-  // text; only fall back to this finish prompt otherwise.
   const showCooldownPrompt = plan.needsCooldown && !plan.cooldown;
 
   async function save() {
