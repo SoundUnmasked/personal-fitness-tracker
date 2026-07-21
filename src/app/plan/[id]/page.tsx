@@ -2,9 +2,10 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
-import { shortDate } from '@/lib/format';
+import { shortDate, isoDate } from '@/lib/format';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
+import SessionActions from '@/components/SessionActions';
 
 export const dynamic = 'force-dynamic';
 
@@ -140,6 +141,14 @@ export default async function PlannedSessionPreview({
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
         <div style={{ flex: 1 }} />
         <Link href="/plan/new" className="icon-btn dim"><span className="msr">edit</span></Link>
+        <SessionActions
+          sessionId={session.id}
+          dateIso={isoDate(session.date)}
+          title={session.title ?? ''}
+          type={session.type}
+          status="planned"
+          variant="detail"
+        />
       </div>
 
       <div style={{ marginTop: 4 }}>

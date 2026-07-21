@@ -149,6 +149,103 @@ export async function createPlannedSession(
 }
 
 // ---------------------------------------------------------------------------
+// Reschedule / duplicate / delete — shared by the in-app server actions AND the
+// external x-api-key endpoints so both behave identically.
+// ---------------------------------------------------------------------------
+
+/** True for a "YYYY-MM-DD" (or full ISO) string that parses to a real date. */
+export function isValidDateIso(s: unknown): s is string {
+  return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}/.test(s) && !Number.isNaN(new Date(s).getTime());
+}
+
+/**
+ * UTC day window for a date string. Date-only inputs are stored at UTC midnight
+ * (matching createPlannedSession's `new Date("YYYY-MM-DD")`), so a session "on"
+ * that day falls in [startOfDay, startOfNextDay).
+ */
+export function dayRangeUtc(dateIso: string): { start: Date; end: Date } {
+  const d = new Date(dateIso);
+  const start = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  return { start, end: new Date(start.getTime() + 86_400_000) };
+}
+
+export interface ClashInfo { id: number; title: string | null; type: string; date: string }
+
+/** Any OTHER session already on the target calendar day (for clash warnings). */
+export async function findDateClash(
+  prisma: PrismaClient,
+  dateIso: string,
+  excludeId: number,
+): Promise<ClashInfo | null> {
+  const { start, end } = dayRangeUtc(dateIso);
+  const s = await prisma.session.findFirst({
+    where: { id: { not: excludeId }, date: { gte: start, lt: end } },
+    select: { id: true, title: true, type: true, date: true },
+    orderBy: { date: 'asc' },
+  });
+  return s ? { id: s.id, title: s.title, type: s.type, date: s.date.toISOString() } : null;
+}
+
+/** Move a session to a new date (caller enforces status/validation rules). */
+export async function moveSessionDate(prisma: PrismaClient, id: number, dateIso: string) {
+  return prisma.session.update({ where: { id }, data: { date: dayRangeUtc(dateIso).start } });
+}
+
+/**
+ * Delete a session and every child row (planned exercises, strength sets, runs)
+ * in one transaction, so nothing is orphaned regardless of DB cascade settings.
+ */
+export async function deleteSessionCascade(prisma: PrismaClient, id: number): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.strengthSet.deleteMany({ where: { sessionId: id } });
+    await tx.run.deleteMany({ where: { sessionId: id } });
+    await tx.plannedExercise.deleteMany({ where: { sessionId: id } });
+    await tx.session.delete({ where: { id } });
+  });
+}
+
+/**
+ * Copy a session's PLAN (exercises, targets, tempo, warm-up, cool-down) onto a
+ * new date as a fresh `planned` session. Logged actuals are never copied.
+ */
+export async function duplicateSession(prisma: PrismaClient, id: number, dateIso: string) {
+  const src = await prisma.session.findUnique({
+    where: { id },
+    include: { plannedExercises: { orderBy: { order: 'asc' } } },
+  });
+  if (!src) return null;
+  return prisma.session.create({
+    data: {
+      date: dayRangeUtc(dateIso).start,
+      type: src.type,
+      status: 'planned',
+      title: src.title,
+      location: src.location,
+      notes: src.notes,
+      warmup: src.warmup,
+      cooldown: src.cooldown,
+      source: 'duplicate',
+      plannedExercises: {
+        create: src.plannedExercises.map((e, i) => ({
+          order: i,
+          exerciseName: e.exerciseName,
+          targetSets: e.targetSets,
+          targetReps: e.targetReps,
+          targetWeightKg: e.targetWeightKg,
+          restSeconds: e.restSeconds,
+          setStyle: e.setStyle,
+          durationSeconds: e.durationSeconds,
+          tempo: e.tempo,
+          supersetGroup: e.supersetGroup,
+          notes: e.notes,
+        })),
+      },
+    },
+    include: { plannedExercises: { orderBy: { order: 'asc' } } },
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Previous weights — progression visibility next to each movement.
 // ---------------------------------------------------------------------------
 export interface PreviousWeight {

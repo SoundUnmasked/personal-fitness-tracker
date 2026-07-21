@@ -1,10 +1,9 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/prisma';
 import { isoDate } from '@/lib/format';
+import SessionRow from '@/components/SessionRow';
 
 export const dynamic = 'force-dynamic';
-
-const DOW = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
 
 export default async function Calendar() {
   const now = new Date();
@@ -84,8 +83,8 @@ export default async function Calendar() {
           <div className="section-head"><div className="h2">Upcoming</div></div>
           <div className="stack stack-11">
             {upcoming.map((s) => (
-              <SessionCard key={s.id} id={s.id} date={s.date} type={s.type} title={s.title}
-                todayIso={todayIso} status="planned" summary={`${s.plannedExercises.length} planned`} />
+              <SessionRow key={s.id} id={s.id} dateIso={isoDate(s.date)} type={s.type} title={s.title}
+                isToday={isoDate(s.date) === todayIso} status="planned" summary={`${s.plannedExercises.length} planned`} />
             ))}
           </div>
         </>
@@ -107,8 +106,8 @@ export default async function Calendar() {
                   ? `${run.distanceKm} km${run.avgPace ? ` · ${run.avgPace}` : ''}`
                   : exCount > 0 ? `${exCount} exercise${exCount === 1 ? '' : 's'} · ${s.strengthSets.length} sets` : '';
                 return (
-                  <SessionCard key={s.id} id={s.id} date={s.date} type={s.type} title={s.title}
-                    todayIso={todayIso} status="completed" summary={summary} durationMin={s.durationMin} />
+                  <SessionRow key={s.id} id={s.id} dateIso={isoDate(s.date)} type={s.type} title={s.title}
+                    isToday={isoDate(s.date) === todayIso} status="completed" summary={summary} durationMin={s.durationMin} />
                 );
               })}
             </div>
@@ -117,40 +116,6 @@ export default async function Calendar() {
       )}
       <div style={{ height: 8 }} />
     </>
-  );
-}
-
-function SessionCard({ id, date, type, title, todayIso, status, summary, durationMin }: {
-  id: number; date: Date; type: string; title: string | null; todayIso: string;
-  status: 'completed' | 'planned'; summary: string; durationMin?: number | null;
-}) {
-  const isToday = isoDate(date) === todayIso;
-  const done = status === 'completed';
-  const d = new Date(date);
-  const statusLabel = done ? 'Done' : isToday ? 'Log' : 'Planned';
-  return (
-    <Link href={`/plan/${id}`} className="list-row"
-      style={{ borderLeft: `3px solid ${isToday ? 'var(--accent)' : done ? 'var(--accent-soft2)' : 'var(--border)'}` }}>
-      <div style={{ width: 42, flex: 'none', textAlign: 'center' }}>
-        <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', color: isToday ? 'var(--accent)' : 'var(--text-faint)' }}>{DOW[(d.getDay() + 6) % 7]}</div>
-        <div style={{ fontSize: 17, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 1 }}>{String(d.getDate()).padStart(2, '0')}</div>
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title || `${type} session`}</div>
-          {isToday && <div style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: '0.06em', padding: '2px 7px', borderRadius: 6, background: 'var(--accent)', color: 'var(--on-accent)', flex: 'none' }}>TODAY</div>}
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 9 }}>
-          <div className="type-chip">{type.toUpperCase()}</div>
-          {summary && <div className="chip" style={{ cursor: 'default' }}>{summary}</div>}
-          {durationMin ? <div className="chip" style={{ cursor: 'default' }}><span className="msr">schedule</span>{durationMin}m</div> : null}
-        </div>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
-        <div style={{ padding: '4px 10px', borderRadius: 9, fontSize: 11, fontWeight: 700, background: done ? 'var(--ok-tint)' : isToday ? 'var(--accent)' : 'var(--surface-strong)', color: done ? 'var(--accent)' : isToday ? 'var(--on-accent)' : 'var(--text-faint)' }}>{statusLabel}</div>
-        <span className="msr" style={{ fontSize: 20, color: 'var(--text-faint)' }}>chevron_right</span>
-      </div>
-    </Link>
   );
 }
 

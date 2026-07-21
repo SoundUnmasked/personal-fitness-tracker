@@ -277,8 +277,31 @@ curl -X POST http://localhost:3000/api/planned-sessions \
        "exercises":[{"name":"Deadlift","sets":5,"reps":3,"weightKg":140}]}'
 ```
 
-`GET /api/planned-sessions?scope=upcoming|all` lists planned sessions (read-only,
-same-origin; used by the Today/Upcoming view).
+**Other endpoints** (same `x-api-key` auth):
+
+| Method / path | Purpose |
+|---|---|
+| `GET /api/planned-sessions?scope=upcoming\|all` | List planned sessions (id, date, title). Used by the delete/push CLIs. |
+| `PATCH /api/planned-sessions/:id` | Move a planned session's date. Body `{ "date": "YYYY-MM-DD", "force"?: true }`. Responds `409` with a `clash` if the day is occupied and `force` is not set; `409` if the session is completed. |
+| `DELETE /api/planned-sessions/:id` | Delete a session (planned or completed) and all of its children. |
+
+### CLI helpers
+
+Payload files live in `sessions/` (gitignored). See `sessions/README.md`.
+
+```bash
+export PLANNED_SESSIONS_API_KEY=...          # the x-api-key
+export PFT_API_URL=http://localhost:3000     # target app (default)
+
+npx tsx scripts/push-session.ts sessions/<file>.json --dry-run  # validate only
+npx tsx scripts/push-session.ts sessions/<file>.json            # create
+npx tsx scripts/delete-session.ts --list                        # ids + dates
+npx tsx scripts/delete-session.ts <id>                          # delete by id
+```
+
+In the app itself, the session detail screen and every Calendar row expose a
+"Move", "Duplicate to another date" and "Delete" action (overflow button).
+Completed sessions cannot be moved and warn before their logged data is deleted.
 
 ---
 
