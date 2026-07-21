@@ -1,6 +1,7 @@
 import Link from 'next/link';
-import { shortDate } from '@/lib/format';
+import { shortDate, isoDate } from '@/lib/format';
 import StructuredBlock from '@/components/StructuredBlock';
+import SessionActions from '@/components/SessionActions';
 
 export interface CompletedSet {
   exerciseName: string;
@@ -58,6 +59,14 @@ export default function CompletedView({ session }: { session: CompletedSession }
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
         <div style={{ flex: 1 }} />
         <div style={{ padding: '6px 10px', borderRadius: 9, fontSize: 11, fontWeight: 700, background: 'var(--ok-tint)', color: 'var(--accent)' }}>Completed</div>
+        <SessionActions
+          sessionId={session.id}
+          dateIso={isoDate(session.date)}
+          title={session.title ?? ''}
+          type={session.type}
+          status="completed"
+          variant="detail"
+        />
       </div>
 
       <div style={{ marginTop: 4 }}>

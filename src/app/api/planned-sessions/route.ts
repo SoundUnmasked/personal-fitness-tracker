@@ -12,10 +12,14 @@ export const dynamic = 'force-dynamic';
  * GET /api/planned-sessions
  *   ?scope=upcoming (default) — planned sessions dated today or later
  *   ?scope=all                — every planned session
- * Read-only listing used by the Today/Upcoming view. No key required (GET is
- * safe and same-origin), but only ever returns planned sessions.
+ * Read-only listing (used by the delete/push CLIs to identify a session).
+ * Requires the same `x-api-key` as the write endpoints; only returns planned
+ * sessions.
  */
 export async function GET(req: NextRequest) {
+  const auth = checkPlannedSessionsKey(req.headers);
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
   const scope = req.nextUrl.searchParams.get('scope') ?? 'upcoming';
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);

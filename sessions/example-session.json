@@ -1,0 +1,24 @@
+{
+  "type": "Power",
+  "date": "2026-01-01",
+  "title": "Example Power session",
+  "location": "Example Gym",
+  "warmup": [
+    { "name": "Easy bike", "detail": "3 min" },
+    { "name": "Band pull-aparts", "detail": "x15" },
+    { "name": "Empty bar warm-up", "detail": "x10" }
+  ],
+  "cooldown": [
+    { "name": "Walk", "detail": "5 min" }
+  ],
+  "exercises": [
+    { "name": "Overhead Press", "sets": 4, "reps": 5, "weightKg": 40, "restSeconds": 180, "setStyle": "reps", "notes": "Placeholder example. Replace with your own values." },
+    { "name": "Barbell Row", "sets": 4, "reps": 5, "weightKg": 50, "restSeconds": 150, "setStyle": "reps" },
+    { "name": "Pull-Up", "sets": 3, "reps": 6, "restSeconds": 120, "setStyle": "reps" },
+    { "name": "Plank", "sets": 2, "restSeconds": 60, "setStyle": "duration", "durationSeconds": 45, "notes": "Log seconds held." },
+    { "name": "Incline DB Bench", "sets": 3, "reps": 10, "weightKg": 20, "restSeconds": 0, "setStyle": "reps", "tempo": "303", "superset": "A" },
+    { "name": "Chest-Supported Row", "sets": 3, "reps": 12, "weightKg": 12, "restSeconds": 90, "setStyle": "reps", "tempo": "303", "superset": "A" },
+    { "name": "Calf Raise", "sets": 3, "reps": 15, "restSeconds": 60, "setStyle": "reps", "tempo": "3010" }
+  ],
+  "notes": "Placeholder payload for the push CLI. Copy this file, edit the values, and keep your real plans in sessions/ (gitignored)."
+}

@@ -21,7 +21,12 @@ function isExempt(req: NextRequest): boolean {
   const { pathname } = req.nextUrl;
   if (pathname === '/unlock') return true; // page + its server action POST
   if (pathname === '/manifest.webmanifest' || pathname === '/sw.js') return true;
-  if (pathname === '/api/planned-sessions' && req.method === 'POST') return true;
+  // The machine-facing planning endpoints carry their own PLANNED_SESSIONS_API_KEY
+  // check (see src/lib/apiKey.ts), so they bypass the passphrase cookie gate:
+  //   GET/POST /api/planned-sessions        — list / create
+  //   DELETE/PATCH /api/planned-sessions/:id — delete / move date
+  if (pathname === '/api/planned-sessions' && (req.method === 'POST' || req.method === 'GET')) return true;
+  if (/^\/api\/planned-sessions\/\d+$/.test(pathname) && (req.method === 'DELETE' || req.method === 'PATCH')) return true;
   return false;
 }
 

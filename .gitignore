@@ -26,6 +26,12 @@ next-env.d.ts
 /public/uploads/*
 !/public/uploads/.gitkeep
 
+# session payload files (personal plans). Only the generic README + example are
+# committed; every real payload you drop here stays out of the repo.
+/sessions/*
+!/sessions/README.md
+!/sessions/example-session.json
+
 # env
 .env
 .env*.local
