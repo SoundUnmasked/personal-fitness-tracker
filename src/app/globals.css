@@ -351,12 +351,41 @@ textarea { resize: vertical; min-height: 42px; line-height: 1.4; }
 }
 .tabbar a, .tabbar .tab {
   flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
-  color: var(--text-faint);
+  color: var(--text-faint); position: relative;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.14s ease, transform 0.07s ease;
 }
+/* Item 7: immediate press feedback + a clear active state (colour on icon and
+   label, plus a short indicator bar at the top of the current tab). */
+.tabbar a:active, .tabbar .tab:active { transform: scale(0.9); }
 .tabbar a.active { color: var(--accent); }
+.tabbar a.active .tab-lbl { color: var(--accent); font-weight: 700; }
+.tabbar a.active::before {
+  content: ''; position: absolute; top: -10px; left: 50%; transform: translateX(-50%);
+  width: 22px; height: 3px; border-radius: 0 0 3px 3px; background: var(--accent);
+}
 .tabbar .tab-ico { font-size: 23px; }
 .tabbar .tab-lbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.04em; }
 .tabbar .fab-slot { flex: 1; display: flex; justify-content: center; }
+.fab { transition: transform 0.07s ease; -webkit-tap-highlight-color: transparent; }
+.fab:active { transform: translateY(-24px) scale(0.92); }
+
+/* --- "Session in progress" mini-bar (item 4) ------------------------------ */
+/* Fixed, sits just above the tab bar. The app shell adds matching bottom
+   padding (.has-session-bar) so page content scrolls clear and is never
+   covered. */
+.session-bar {
+  position: fixed; left: 0; right: 0; bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 45; max-width: 436px; margin: 0 auto; width: calc(100% - 24px);
+  display: flex; align-items: center; gap: 11px; padding: 10px 12px 10px 14px;
+  border-radius: 16px; background: var(--accent); color: var(--on-accent);
+  box-shadow: 0 12px 30px -10px var(--accent-glow); text-decoration: none;
+  -webkit-tap-highlight-color: transparent; transition: transform 0.08s ease;
+}
+.session-bar:active { transform: scale(0.985); }
+.app.has-session-bar:not(.has-footer) {
+  padding-bottom: calc(166px + env(safe-area-inset-bottom));
+}
 .fab {
   width: 52px; height: 52px; margin-top: -24px;
   border-radius: 18px; background: var(--accent); color: var(--on-accent);

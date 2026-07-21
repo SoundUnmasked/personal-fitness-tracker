@@ -82,8 +82,9 @@ describe('validatePlannedSession', () => {
       ],
     });
     expect(r.ok).toBe(true);
-    expect(r.value?.warmup).toBe('5 min bike');
-    expect(r.value?.cooldown).toBe('Couch stretch');
+    // Legacy free-text warm/cool-down is normalised into a single structured item.
+    expect(r.value?.warmup).toEqual([{ name: '5 min bike', done: false }]);
+    expect(r.value?.cooldown).toEqual([{ name: 'Couch stretch', done: false }]);
     expect(r.value?.exercises[0].restSeconds).toBe(150);
     expect(r.value?.exercises[0].tempo).toBe('31X1'); // normalised upper-case
     expect(r.value?.exercises[1].setStyle).toBe('duration');

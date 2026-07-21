@@ -10,6 +10,7 @@ import {
   type SessionType,
   type SetStyle,
 } from './constants';
+import { normalizeFlowInput, serializeFlowItems, type FlowItem } from './flowItems';
 
 // ---------------------------------------------------------------------------
 // The JSON contract for a planned session (also documented in the README).
@@ -33,8 +34,8 @@ export interface PlannedSessionInput {
   title?: string | null;
   location?: string | null;
   notes?: string | null;
-  warmup?: string | null; // structured warm-up text
-  cooldown?: string | null; // structured cool-down text
+  warmup?: FlowItem[] | null; // structured warm-up items
+  cooldown?: FlowItem[] | null; // structured cool-down items
   exercises: PlannedExerciseInput[];
 }
 
@@ -103,8 +104,8 @@ export function validatePlannedSession(body: unknown): ValidationResult {
       title: strOrNull(b.title),
       location: strOrNull(b.location),
       notes: strOrNull(b.notes),
-      warmup: strOrNull(b.warmup),
-      cooldown: strOrNull(b.cooldown),
+      warmup: normalizeFlowInput(b.warmup),
+      cooldown: normalizeFlowInput(b.cooldown),
       exercises,
     },
   };
@@ -124,8 +125,8 @@ export async function createPlannedSession(
       title: input.title ?? null,
       location: input.location ?? DEFAULT_LOCATION,
       notes: input.notes ?? null,
-      warmup: input.warmup ?? null,
-      cooldown: input.cooldown ?? null,
+      warmup: serializeFlowItems(input.warmup),
+      cooldown: serializeFlowItems(input.cooldown),
       source,
       plannedExercises: {
         create: input.exercises.map((e, i) => ({
@@ -174,6 +175,7 @@ export async function previousWeights(
     where: {
       exerciseName: { in: unique },
       weightKg: { not: null },
+      isWarmup: false, // warm-up (ramp-up) sets never count as a "last time" top set
       session: {
         status: 'completed',
         ...(beforeDate ? { date: { lt: beforeDate } } : {}),
@@ -214,6 +216,7 @@ export interface ActualSetInput {
   reps?: number | null;
   weightKg?: number | null;
   durationSeconds?: number | null; // logged time for duration-style sets
+  isWarmup?: boolean; // warm-up (ramp-up) set — excluded from working-set numbering
   rpe?: number | null;
   notes?: string | null;
 }
@@ -224,6 +227,8 @@ export interface CompletePlanInput {
   rpeOverall?: number | null;
   cooldownDone?: boolean;
   notes?: string | null;
+  warmup?: FlowItem[] | null;   // logged warm-up items (done + loggedWeightKg)
+  cooldown?: FlowItem[] | null; // logged cool-down items
   strengthSets: ActualSetInput[];
   run?: {
     distanceKm?: number | null;

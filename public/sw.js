@@ -6,8 +6,11 @@
 //    straight to the network and is never cached, so personal data is always
 //    fresh. (v2: previously all same-origin GETs were cache-first, which served
 //    stale server-rendered data on client-side navigations.)
-const CACHE = 'pft-shell-v2';
-const SHELL = ['/', '/log/strength', '/checkin', '/inbody', '/sync', '/manifest.webmanifest'];
+// v3: bumped so activate() purges every older cache — guarantees a device
+// picks up new JS/HTML rather than an old cached bundle. Also dropped the
+// removed /log/strength route from the precache SHELL.
+const CACHE = 'pft-shell-v3';
+const SHELL = ['/', '/checkin', '/inbody', '/sync', '/manifest.webmanifest'];
 const STATIC_PREFIXES = ['/_next/static/', '/fonts/', '/icons/'];
 
 self.addEventListener('install', (event) => {
