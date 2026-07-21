@@ -31,7 +31,7 @@ export function verifyPassphrase(input: string): boolean {
 export function authCookieValue(): string {
   const secret = process.env.APP_AUTH_SECRET?.trim();
   if (!secret) {
-    throw new Error('APP_AUTH_SECRET is not set — cannot issue auth cookie.');
+    throw new Error('APP_AUTH_SECRET is not set: cannot issue auth cookie.');
   }
   return createHmac('sha256', secret).update(AUTH_PAYLOAD).digest('hex');
 }

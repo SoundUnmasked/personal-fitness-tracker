@@ -5,7 +5,6 @@ import { previousWeights } from '@/lib/plannedSessions';
 import { shortDate } from '@/lib/format';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
-import { parseFlowItems } from '@/lib/flowItems';
 
 export const dynamic = 'force-dynamic';
 
@@ -65,8 +64,8 @@ export default async function PlannedSessionPreview({
           rpeOverall: session.rpeOverall,
           energyPre: session.energyPre,
           cooldownDone: session.cooldownDone,
-          warmup: parseFlowItems(session.warmup),
-          cooldown: parseFlowItems(session.cooldown),
+          warmup: session.warmup,
+          cooldown: session.cooldown,
           source: session.source,
           notes: session.notes,
           sets: session.strengthSets.map((s) => ({
@@ -113,7 +112,7 @@ export default async function PlannedSessionPreview({
       rest: e.restSeconds != null ? restLabel(e.restSeconds) : null,
       tempo: e.tempo,
       timed,
-      last: p ? `${p.weightKg != null ? `${p.weightKg} kg` : '—'}${p.reps != null ? ` × ${p.reps}` : ''}` : null,
+      last: p ? `${p.weightKg != null ? `${p.weightKg} kg` : '·'}${p.reps != null ? ` × ${p.reps}` : ''}` : null,
       note: e.notes,
     };
   };
@@ -165,11 +164,11 @@ export default async function PlannedSessionPreview({
       <div className="stat-row" style={{ marginTop: 18 }}>
         <TotalTile icon="local_fire_department" value={session.type} label="session type" />
         <TotalTile icon="fitness_center" value={String(exs.length)} label="exercises" />
-        <TotalTile icon="repeat" value={totalSets ? String(totalSets) : '—'} label="planned sets" />
+        <TotalTile icon="repeat" value={totalSets ? String(totalSets) : '·'} label="planned sets" />
       </div>
 
       {/* Structured warm-up (own collapsible block) */}
-      <StructuredBlock kind="warmup" items={parseFlowItems(session.warmup)} />
+      <StructuredBlock kind="warmup" raw={session.warmup} />
 
       {/* Plan */}
       <div className="section-head">
@@ -235,7 +234,7 @@ export default async function PlannedSessionPreview({
       )}
 
       {/* Structured cool-down (own collapsible block) */}
-      <StructuredBlock kind="cooldown" items={parseFlowItems(session.cooldown)} />
+      <StructuredBlock kind="cooldown" raw={session.cooldown} />
 
       <div style={{ height: 92 }} />
       {/* Fixed footer CTA */}

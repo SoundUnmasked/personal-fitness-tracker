@@ -52,7 +52,7 @@ export default async function Home() {
               </>
             ) : (
               <div style={{ marginTop: 8 }}>
-                <div style={{ fontSize: 40, lineHeight: 0.9, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text-faint)' }}>—</div>
+                <div style={{ fontSize: 40, lineHeight: 0.9, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text-faint)' }}>·</div>
                 <div style={{ fontSize: 12.5, color: 'var(--text-dim)', marginTop: 8, maxWidth: 190 }}>Check in to set today&apos;s readiness.</div>
               </div>
             )}
@@ -86,9 +86,9 @@ export default async function Home() {
 
       {/* Stat tiles */}
       <div className="stat-row" style={{ marginTop: 10 }}>
-        <StatTile label="SLEEP" value={d.sleepHours != null ? String(d.sleepHours) : '—'} unit={d.sleepHours != null ? 'h' : ''} placeholder={d.sleepHours == null} hint={d.sleepHours == null ? 'from check-in' : undefined} />
-        <StatTile label="HRV" value="—" unit="" placeholder hint="link wearable" />
-        <StatTile label="WEIGHT" value={d.weightKg != null ? d.weightKg.toFixed(1) : '—'} unit={d.weightKg != null ? 'kg' : ''} placeholder={d.weightKg == null} hint={d.weightKg == null ? 'no scan yet' : (d.weightSource ?? undefined)?.toLowerCase()} />
+        <StatTile label="SLEEP" value={d.sleepHours != null ? String(d.sleepHours) : '·'} unit={d.sleepHours != null ? 'h' : ''} placeholder={d.sleepHours == null} hint={d.sleepHours == null ? 'from check-in' : undefined} />
+        <StatTile label="HRV" value="·" unit="" placeholder hint="link wearable" />
+        <StatTile label="WEIGHT" value={d.weightKg != null ? d.weightKg.toFixed(1) : '·'} unit={d.weightKg != null ? 'kg' : ''} placeholder={d.weightKg == null} hint={d.weightKg == null ? 'no scan yet' : (d.weightSource ?? undefined)?.toLowerCase()} />
       </div>
 
       {/* This week */}

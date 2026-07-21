@@ -16,14 +16,14 @@ export default async function SyncPage() {
     {
       source: 'strava' as const,
       title: 'Strava',
-      blurb: 'Runs — source of truth for distance & pace. HR via COROS.',
+      blurb: 'Runs: source of truth for distance & pace. HR via COROS.',
       state: strava,
       configured: isStravaConfigured(),
     },
     {
       source: 'withings' as const,
       title: 'Withings',
-      blurb: 'Body composition — daily trend (kept separate from InBody).',
+      blurb: 'Body composition: daily trend (kept separate from InBody).',
       state: withings,
       configured: isWithingsConfigured(),
     },
@@ -68,7 +68,7 @@ export default async function SyncPage() {
         </h2>
         <p className="muted">
           {isAnthropicConfigured()
-            ? 'ANTHROPIC_API_KEY is set — photo extraction is live.'
+            ? 'ANTHROPIC_API_KEY is set. Photo extraction is live.'
             : 'Add ANTHROPIC_API_KEY to .env to enable InBody photo extraction. Manual entry works regardless.'}
         </p>
       </div>
@@ -78,7 +78,7 @@ export default async function SyncPage() {
         <p className="muted">
           Reserved integration point for a future native Android companion
           (steps, HR, sleep). Endpoint <code>/api/health-connect</code> is
-          documented but not built — see README.
+          documented but not built. See README.
         </p>
       </div>
     </>

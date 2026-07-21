@@ -149,7 +149,7 @@ export function mapActivityToRun(a: StravaActivity): MappedRun | null {
     run: {
       distanceKm: Number(distanceKm.toFixed(2)),
       durationMin: Number(durationMin.toFixed(1)),
-      avgPace: secondsPerKm ? paceFromSeconds(secondsPerKm) : '—',
+      avgPace: secondsPerKm ? paceFromSeconds(secondsPerKm) : '·',
       avgHr: a.average_heartrate ? Math.round(a.average_heartrate) : null,
       maxHr: a.max_heartrate ? Math.round(a.max_heartrate) : null,
       // Strava receives HR from the COROS watch, so any HR here is COROS —

@@ -17,7 +17,7 @@ export interface ExtractedBodyComp {
 }
 
 const SYSTEM_PROMPT = `You are a precise data-extraction tool for InBody body-composition scan photos.
-Extract the printed metrics and return ONLY a single JSON object — no prose, no markdown, no code fences.
+Extract the printed metrics and return ONLY a single JSON object. No prose, no markdown, no code fences.
 Use this exact shape (use null for anything not clearly visible; never guess):
 {
   "date": string|null,                       // ISO 8601 (YYYY-MM-DD) if a test date is printed
