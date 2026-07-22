@@ -409,21 +409,23 @@ export interface LoggedSetRow {
 
 /**
  * True when a ticked row holds no actual work (Package M fix 3): no positive
- * reps AND no positive weight AND no positive duration. "0 reps means the set
- * was not done" — such rows are dropped, never written. A ticked bodyweight
+ * reps AND no positive duration. "0 reps means the set was not done", and a
+ * loaded bar with 0 reps is not a completed set either — positive WEIGHT alone
+ * does NOT qualify. Such rows are dropped, never written. A ticked bodyweight
  * set with positive reps, or a timed set with positive duration, is kept.
  */
-export function isEmptyTickedSet(s: Pick<LoggedSetRow, 'kg' | 'reps' | 'dur'>): boolean {
+export function isEmptyTickedSet(s: Pick<LoggedSetRow, 'reps' | 'dur'>): boolean {
   const pos = (v: string) => v !== '' && Number(v) > 0;
-  return !pos(s.reps) && !pos(s.kg) && !pos(s.dur);
+  return !pos(s.reps) && !pos(s.dur);
 }
 
 /**
  * Build the strength-set payload for a finishing session from the logger's
  * rows. Pure. Includes ONLY ticked (`done`) rows; unticked rows are dropped
- * entirely — no ghost rows, no zero rows. Ticked rows with no positive
- * reps/weight/duration are also dropped (fix 3) BEFORE numbering, so saved
- * working sets count 1..n with no gaps; warm-up rows carry setNo 0 + the flag.
+ * entirely — no ghost rows, no zero rows. Ticked rows with no positive reps
+ * AND no positive duration are also dropped (fix 3) BEFORE numbering — a set
+ * needs reps or time to count, weight alone is not enough — so saved working
+ * sets count 1..n with no gaps; warm-up rows carry setNo 0 + the flag.
  */
 export function tickedStrengthSets(
   exercises: { name: string }[],

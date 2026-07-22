@@ -16,12 +16,13 @@ here. Nothing requiring personal credentials was invented — all secrets are
 - **Rest timer is never clobbered (fix 2).** Ticking a set (or "Log set")
   starts a rest timer ONLY if none is running; an active countdown is left
   alone.
-- **Empty ticked sets are dropped (fix 3).** Exactly as specified: a ticked
-  set with no positive reps AND no positive weight AND no positive duration is
-  never written, and working-set numbers are assigned after the drop (no
-  gaps). Note the literal rule keeps a ticked weight-only row (60 kg × 0 reps
-  has a positive weight) — flagged in the PR in case the intent was stricter.
-  This supersedes Package H's "a ticked row with empty fields IS saved".
+- **Empty ticked sets are dropped (fix 3).** A ticked strength set is written
+  ONLY if it has positive reps OR positive duration — a loaded bar with 0 reps
+  (positive weight, 0 reps) is NOT a completed set and is dropped. Working-set
+  numbers are assigned after the drop (no gaps). This supersedes Package H's
+  "a ticked row with empty fields IS saved". (Original Package M shipped the
+  looser "reps OR weight OR duration" rule; tightened by follow-up per the
+  user's decision that weight alone must not qualify.)
 - **RPE half-points + honest uncertainty (fix 4).** `rpe`/`rpe_overall`
   became Float in schema.prisma — NO DDL anywhere: SQLite INTEGER affinity
   already stores 7.5 as REAL, so existing local + Turso tables are untouched

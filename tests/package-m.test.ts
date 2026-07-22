@@ -25,8 +25,8 @@ const row = (over: Partial<LoggedSetRow> = {}): LoggedSetRow => ({
   kg: '', reps: '', dur: '', rpe: '', done: false, ...over,
 });
 
-describe('fix 3 — ticked-but-empty sets are dropped', () => {
-  it('drops a ticked set with 0/empty reps, weight and duration', () => {
+describe('fix 3 — a set needs reps or duration; weight alone is not enough', () => {
+  it('drops a ticked set with no positive reps and no positive duration', () => {
     for (const s of [
       row({ done: true }),                            // everything empty
       row({ done: true, reps: '0', kg: '0' }),        // explicit zeros
@@ -35,6 +35,12 @@ describe('fix 3 — ticked-but-empty sets are dropped', () => {
       expect(isEmptyTickedSet(s)).toBe(true);
       expect(tickedStrengthSets([{ name: 'Back Squat' }], [[s]])).toEqual([]);
     }
+  });
+
+  it('drops a ticked 60kg x 0-rep set — a loaded bar with 0 reps is not a completed set', () => {
+    const s = row({ done: true, kg: '60', reps: '0' });
+    expect(isEmptyTickedSet(s)).toBe(true);
+    expect(tickedStrengthSets([{ name: 'Back Squat' }], [[s]])).toEqual([]);
   });
 
   it('keeps a ticked bodyweight set with positive reps (weight legitimately absent)', () => {
@@ -49,12 +55,10 @@ describe('fix 3 — ticked-but-empty sets are dropped', () => {
     expect(out[0]).toMatchObject({ durationSeconds: 45 });
   });
 
-  it('keeps a ticked set with positive weight (per the specified drop rule)', () => {
-    // The specified filter drops only when reps AND weight AND duration are all
-    // non-positive — a weight-only row survives it.
-    const out = tickedStrengthSets([{ name: 'Back Squat' }], [[row({ done: true, kg: '60', reps: '0' })]]);
+  it('keeps a ticked weighted set with positive reps', () => {
+    const out = tickedStrengthSets([{ name: 'Back Squat' }], [[row({ done: true, kg: '100', reps: '6' })]]);
     expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ weightKg: 60, reps: 0 });
+    expect(out[0]).toMatchObject({ weightKg: 100, reps: 6 });
   });
 
   it('numbers working sets AFTER dropping empty rows (no gaps)', () => {
@@ -62,7 +66,7 @@ describe('fix 3 — ticked-but-empty sets are dropped', () => {
       [{ name: 'Back Squat' }],
       [[
         row({ done: true, kg: '100', reps: '6' }),
-        row({ done: true, reps: '0' }),            // ticked but empty → dropped
+        row({ done: true, kg: '60', reps: '0' }),  // loaded bar, 0 reps → dropped
         row({ done: true, kg: '100', reps: '5' }),
       ]],
     );
