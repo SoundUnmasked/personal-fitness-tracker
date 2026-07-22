@@ -71,7 +71,7 @@ export default async function PlannedSessionPreview({
           notes: session.notes,
           sets: session.strengthSets.map((s) => ({
             exerciseName: s.exerciseName, setNo: s.setNo, reps: s.reps,
-            weightKg: s.weightKg, durationSeconds: s.durationSeconds, rpe: s.rpe, notes: s.notes,
+            weightKg: s.weightKg, durationSeconds: s.durationSeconds, rpe: s.rpe, rpeHigh: s.rpeHigh, notes: s.notes,
           })),
           runs: session.runs.map((r) => ({
             distanceKm: r.distanceKm, durationMin: r.durationMin, avgPace: r.avgPace,
@@ -113,7 +113,12 @@ export default async function PlannedSessionPreview({
       rest: e.restSeconds != null ? restLabel(e.restSeconds) : null,
       tempo: e.tempo,
       timed,
-      last: p ? `${p.weightKg != null ? `${p.weightKg} kg` : '·'}${p.reps != null ? ` × ${p.reps}` : ''}` : null,
+      // Fix 5: bodyweight history reads "10 reps", not "· × 10".
+      last: p
+        ? p.weightKg != null
+          ? `${p.weightKg} kg${p.reps != null ? ` × ${p.reps}` : ''}`
+          : p.reps != null ? `${p.reps} reps` : null
+        : null,
       note: e.notes,
     };
   };

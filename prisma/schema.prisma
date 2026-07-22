@@ -56,7 +56,7 @@ model Session {
   durationMin  Int?      @map("duration_min")
   location     String?   @default("Third Space Wimbledon")
   energyPre    Int?      @map("energy_pre") // 1-5
-  rpeOverall   Int?      @map("rpe_overall") // 1-10
+  rpeOverall   Float?    @map("rpe_overall") // 1-10, half-points allowed (Package M)
   cooldownDone Boolean   @default(false) @map("cooldown_done") // 10-min cooldown (Foundation)
   warmupDone   Boolean   @default(false) @map("warmup_done") // legacy: whole warm-up ticked
   // Structured warm-up / cool-down. Stored as a JSON array of items
@@ -126,7 +126,13 @@ model StrengthSet {
   // Warm-up set (ramp-up) vs a working set. Warm-up rows are logged but excluded
   // from working-set numbering and flagged separately in exports.
   isWarmup     Boolean @default(false) @map("is_warmup")
-  rpe          Int? // 1-10
+  // RPE 1-10. Float so half-points (7.5) survive; when the athlete is unsure,
+  // `rpe` holds the lower bound and `rpeHigh` the upper ("7 or 8" → 7 / 8).
+  // SQLite note: existing DBs have INTEGER affinity here — that's fine, SQLite
+  // stores non-integral values as REAL under INTEGER affinity, so no DDL is
+  // needed for the type change (rpe_high is additive via turso-push).
+  rpe          Float? // 1-10, half-points allowed
+  rpeHigh      Float?  @map("rpe_high") // upper bound when RPE was a range
   notes        String?
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)

@@ -268,6 +268,10 @@ export interface PreviousWeight {
  * For each exercise name, find the most recent COMPLETED set (top working set
  * by weight on the most recent day it was performed). Used to pre-fill / show
  * "last time" next to each planned movement.
+ *
+ * Bodyweight history counts (fix 5): sets with no weight are included, so a
+ * movement only ever done unweighted still reports its previous reps. Within a
+ * day, weighted sets outrank unweighted ones (SQLite sorts NULL last on DESC).
  */
 export async function previousWeights(
   prisma: PrismaClient,
@@ -280,7 +284,6 @@ export async function previousWeights(
   const rows = await prisma.strengthSet.findMany({
     where: {
       exerciseName: { in: unique },
-      weightKg: { not: null },
       isWarmup: false, // warm-up (ramp-up) sets never count as a "last time" top set
       session: {
         status: 'completed',
@@ -323,7 +326,8 @@ export interface ActualSetInput {
   weightKg?: number | null;
   durationSeconds?: number | null; // logged time for duration-style sets
   isWarmup?: boolean; // warm-up (ramp-up) set — excluded from working-set numbering
-  rpe?: number | null;
+  rpe?: number | null; // 1-10, half-points allowed
+  rpeHigh?: number | null; // upper bound when RPE was a range ("7 or 8")
   notes?: string | null;
 }
 
@@ -398,15 +402,28 @@ export interface LoggedSetRow {
   reps: string;
   dur: string;
   rpe: string;
+  rpeHi?: string; // upper bound when RPE was logged as a range ("7 or 8")
   done: boolean;
   warmup?: boolean;
 }
 
 /**
+ * True when a ticked row holds no actual work (Package M fix 3): no positive
+ * reps AND no positive weight AND no positive duration. "0 reps means the set
+ * was not done" — such rows are dropped, never written. A ticked bodyweight
+ * set with positive reps, or a timed set with positive duration, is kept.
+ */
+export function isEmptyTickedSet(s: Pick<LoggedSetRow, 'kg' | 'reps' | 'dur'>): boolean {
+  const pos = (v: string) => v !== '' && Number(v) > 0;
+  return !pos(s.reps) && !pos(s.kg) && !pos(s.dur);
+}
+
+/**
  * Build the strength-set payload for a finishing session from the logger's
  * rows. Pure. Includes ONLY ticked (`done`) rows; unticked rows are dropped
- * entirely — no ghost rows, no zero rows. Working-set numbers count ticked
- * working sets from 1; warm-up rows carry setNo 0 and the flag.
+ * entirely — no ghost rows, no zero rows. Ticked rows with no positive
+ * reps/weight/duration are also dropped (fix 3) BEFORE numbering, so saved
+ * working sets count 1..n with no gaps; warm-up rows carry setNo 0 + the flag.
  */
 export function tickedStrengthSets(
   exercises: { name: string }[],
@@ -414,18 +431,21 @@ export function tickedStrengthSets(
 ): ActualSetInput[] {
   return exercises.flatMap((ex, ei) => {
     let workNo = 0;
-    return (rows[ei] ?? []).filter((s) => s.done).map((s) => {
-      if (!s.warmup) workNo += 1;
-      return {
-        exerciseName: ex.name,
-        setNo: s.warmup ? 0 : workNo,
-        reps: s.reps ? Number(s.reps) : null,
-        weightKg: s.kg ? Number(s.kg) : null,
-        durationSeconds: s.dur ? Number(s.dur) : null,
-        isWarmup: Boolean(s.warmup),
-        rpe: s.rpe ? Number(s.rpe) : null,
-      };
-    });
+    return (rows[ei] ?? [])
+      .filter((s) => s.done && !isEmptyTickedSet(s))
+      .map((s) => {
+        if (!s.warmup) workNo += 1;
+        return {
+          exerciseName: ex.name,
+          setNo: s.warmup ? 0 : workNo,
+          reps: s.reps ? Number(s.reps) : null,
+          weightKg: s.kg ? Number(s.kg) : null,
+          durationSeconds: s.dur ? Number(s.dur) : null,
+          isWarmup: Boolean(s.warmup),
+          rpe: s.rpe ? Number(s.rpe) : null,
+          rpeHigh: s.rpeHi ? Number(s.rpeHi) : null,
+        };
+      });
   });
 }
 
@@ -464,7 +484,8 @@ export async function saveCompletedActuals(
         status: 'completed',
         durationMin: intOrNull(raw.durationMin),
         energyPre: intOrNull(raw.energyPre),
-        rpeOverall: intOrNull(raw.rpeOverall),
+        // Float, not int: 7.5 must survive (fix 4 — intOrNull rounded it to 8).
+        rpeOverall: floatOrNull(raw.rpeOverall),
         // cooldownDone is persisted live from the logger's cool-down block, so
         // only overwrite it when the finish step explicitly sends a value.
         ...(raw.cooldownDone !== undefined ? { cooldownDone: Boolean(raw.cooldownDone) } : {}),
@@ -482,7 +503,9 @@ export async function saveCompletedActuals(
               weightKg: floatOrNull(s.weightKg),
               durationSeconds: nonNegIntOrNull(s.durationSeconds),
               isWarmup: Boolean(s.isWarmup),
-              rpe: intOrNull(s.rpe),
+              // Float, not int: half-point RPEs survive (fix 4).
+              rpe: floatOrNull(s.rpe),
+              rpeHigh: floatOrNull(s.rpeHigh),
               notes: strOrNull(s.notes),
             })),
         },

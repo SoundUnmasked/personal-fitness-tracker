@@ -14,6 +14,7 @@
 
 export interface DraftSetRow {
   kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string;
+  rpeHi?: string; // upper bound when RPE was logged as a range ("7 or 8")
   warmup?: boolean; // warm-up (ramp-up) row — sits above set 1, no set number
 }
 import type { FlowItem } from './flowItems';

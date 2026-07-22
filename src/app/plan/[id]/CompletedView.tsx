@@ -9,7 +9,8 @@ export interface CompletedSet {
   reps: number | null;
   weightKg: number | null;
   durationSeconds: number | null;
-  rpe: number | null;
+  rpe: number | null; // half-points allowed (7.5)
+  rpeHigh: number | null; // upper bound when RPE was a range ("7 or 8")
   notes: string | null;
 }
 export interface CompletedRun {
@@ -155,7 +156,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
                         {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>·</span> : null}
                         {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{s.durationSeconds}s</span>}
                         {s.reps != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> × {s.reps}</span>}
-                        {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}</span>}
+                        {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}{s.rpeHigh != null ? `-${s.rpeHigh}` : ''}</span>}
                       </div>
                     </div>
                   ))}

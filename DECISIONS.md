@@ -6,6 +6,59 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package M — logger correctness bug fixes
+
+- **Entry replaces, never appends (fix 1).** Tapping into a keypad cell arms
+  "fresh entry": the first keystroke replaces the whole pre-filled value
+  (backspace clears it), like select-all in a native field. Native numeric
+  inputs (finish sheet, warm-up weights, manual plan form) get
+  select-all-on-focus for the same effect.
+- **Rest timer is never clobbered (fix 2).** Ticking a set (or "Log set")
+  starts a rest timer ONLY if none is running; an active countdown is left
+  alone.
+- **Empty ticked sets are dropped (fix 3).** Exactly as specified: a ticked
+  set with no positive reps AND no positive weight AND no positive duration is
+  never written, and working-set numbers are assigned after the drop (no
+  gaps). Note the literal rule keeps a ticked weight-only row (60 kg × 0 reps
+  has a positive weight) — flagged in the PR in case the intent was stricter.
+  This supersedes Package H's "a ticked row with empty fields IS saved".
+- **RPE half-points + honest uncertainty (fix 4).** `rpe`/`rpe_overall`
+  became Float in schema.prisma — NO DDL anywhere: SQLite INTEGER affinity
+  already stores 7.5 as REAL, so existing local + Turso tables are untouched
+  (schema.sql updated for fresh installs only). The rounding lived in
+  `intOrNull` on the save path; now `floatOrNull`. Ranges: new additive
+  `strength_sets.rpe_high REAL` column (registered in turso-push
+  ADDITIVE_COLUMNS; owner applies it to Turso whenever they next run
+  db:push:turso) — `rpe` holds the lower bound. Input stays keypad-first: a
+  one-tap "Unsure? Log as 7 or 8" toggle under the RPE keypad sets/clears the
+  +1 upper bound; typing a new RPE clears it. Displayed as "7-8" (hyphen —
+  repo bans en dashes in UI strings).
+- **Previous includes bodyweight history (fix 5).** `previousWeights` no
+  longer requires a weight; within a day weighted sets still outrank
+  bodyweight ones (SQLite sorts NULL last on DESC). The PREV cell shows
+  weight AND reps, reps alone for bodyweight, and never a bare "reps" label.
+- **Back never kills the session (fix 6).** While a bottom panel (keypad /
+  rest / tempo) is open, a sentinel history entry makes Android's Back
+  gesture close the panel instead of navigating. Separately, non-explicit
+  exits (accidental back-out, backgrounding) now save the draft with its REAL
+  pause state instead of force-pausing, and rehydrating a running draft adds
+  the wall-clock time spent away — the session clock behaves as if it never
+  stopped. Only the pause toggle and "Save and come back later" freeze it.
+  Consequence: a running draft left overnight keeps counting (it is honestly
+  shown as "in progress" in the mini-bar the whole time).
+- **Warm-up rows (fixes 7+8).** No RPE cell and no rest-timer auto-start on
+  warm-up rows; their field cycle is weight → reps (or time). The row badge is
+  plain-text "WU" — the old icon glyph rendered blank when the icon font
+  hadn't loaded (real-phone report). Read-only views no longer render an
+  unticked warm-up as "0/8 done": the checklist is a guide, so progress is
+  shown only once something was ticked.
+- **The primary keypad button says what it does (fix 9).** It still cycles
+  fields, but is labelled "Next: reps" / "Next: RPE" / "Next: time" until the
+  final field, where it reads "Log set" (with a check icon). Label always
+  matches action.
+
+---
+
 # Package L1 — interaction polish
 
 - **Pause is a single-tap toggle.** The full-screen PAUSED interstitial is gone;

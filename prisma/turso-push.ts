@@ -42,6 +42,10 @@ const ADDITIVE_COLUMNS: Record<string, { name: string; type: string }[]> = {
   strength_sets: [
     { name: 'duration_seconds', type: 'INTEGER' },
     { name: 'is_warmup', type: 'BOOLEAN NOT NULL DEFAULT false' },
+    // Upper bound when RPE was logged as a range ("7 or 8"); rpe holds the
+    // lower. The rpe/rpe_overall Float change needs no DDL: SQLite INTEGER
+    // affinity stores 7.5 as REAL already.
+    { name: 'rpe_high', type: 'REAL' },
   ],
 };
 
