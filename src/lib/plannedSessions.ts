@@ -383,3 +383,111 @@ export function tempoOrNull(v: unknown): string | null {
 export type SessionWithChildren = Prisma.SessionGetPayload<{
   include: { plannedExercises: true; strengthSets: true; runs: true };
 }>;
+
+// ---------------------------------------------------------------------------
+// Finish → strength-set payload. Only sets the user explicitly TICKED are
+// saved. Every logger row pre-fills its values from the plan's targets, so
+// "has a value" is meaningless as a completion signal — an untouched session
+// would save a full workout that never happened and poison the "last time"
+// pre-fills. The tick is the user's assertion that the set was performed.
+// ---------------------------------------------------------------------------
+
+/** The logger's per-set row shape (values are keypad strings). */
+export interface LoggedSetRow {
+  kg: string;
+  reps: string;
+  dur: string;
+  rpe: string;
+  done: boolean;
+  warmup?: boolean;
+}
+
+/**
+ * Build the strength-set payload for a finishing session from the logger's
+ * rows. Pure. Includes ONLY ticked (`done`) rows; unticked rows are dropped
+ * entirely — no ghost rows, no zero rows. Working-set numbers count ticked
+ * working sets from 1; warm-up rows carry setNo 0 and the flag.
+ */
+export function tickedStrengthSets(
+  exercises: { name: string }[],
+  rows: LoggedSetRow[][],
+): ActualSetInput[] {
+  return exercises.flatMap((ex, ei) => {
+    let workNo = 0;
+    return (rows[ei] ?? []).filter((s) => s.done).map((s) => {
+      if (!s.warmup) workNo += 1;
+      return {
+        exerciseName: ex.name,
+        setNo: s.warmup ? 0 : workNo,
+        reps: s.reps ? Number(s.reps) : null,
+        weightKg: s.kg ? Number(s.kg) : null,
+        durationSeconds: s.dur ? Number(s.dur) : null,
+        isWarmup: Boolean(s.warmup),
+        rpe: s.rpe ? Number(s.rpe) : null,
+      };
+    });
+  });
+}
+
+/** Run actuals resolved by the caller (HR provenance already picked). */
+export interface CompletedRunData {
+  distanceKm: number | null;
+  durationMin: number | null;
+  avgPace: string | null;
+  avgHr: number | null;
+  maxHr: number | null;
+  hrSource: string | null;
+  calfRaisesDone: boolean;
+  notes: string | null;
+}
+
+/**
+ * Persist a finished session's actuals and flip it to `completed`. Replaces any
+ * prior actuals in the same transaction (idempotent re-save), so re-finishing —
+ * e.g. after "Edit logged sets" — overwrites cleanly.
+ */
+export async function saveCompletedActuals(
+  prisma: PrismaClient,
+  sessionId: number,
+  raw: CompletePlanInput,
+  runData: CompletedRunData | null,
+  fallbackNotes: string | null,
+): Promise<void> {
+  const sets: ActualSetInput[] = Array.isArray(raw.strengthSets) ? raw.strengthSets : [];
+  await prisma.$transaction(async (tx) => {
+    await tx.strengthSet.deleteMany({ where: { sessionId } });
+    await tx.run.deleteMany({ where: { sessionId } });
+
+    await tx.session.update({
+      where: { id: sessionId },
+      data: {
+        status: 'completed',
+        durationMin: intOrNull(raw.durationMin),
+        energyPre: intOrNull(raw.energyPre),
+        rpeOverall: intOrNull(raw.rpeOverall),
+        // cooldownDone is persisted live from the logger's cool-down block, so
+        // only overwrite it when the finish step explicitly sends a value.
+        ...(raw.cooldownDone !== undefined ? { cooldownDone: Boolean(raw.cooldownDone) } : {}),
+        // Persist logged warm-up / cool-down items (ticks + actual weights).
+        ...(raw.warmup !== undefined ? { warmup: serializeFlowItems(raw.warmup) } : {}),
+        ...(raw.cooldown !== undefined ? { cooldown: serializeFlowItems(raw.cooldown) } : {}),
+        notes: strOrNull(raw.notes) ?? fallbackNotes,
+        strengthSets: {
+          create: sets
+            .filter((s) => s.exerciseName?.trim())
+            .map((s, i) => ({
+              exerciseName: s.exerciseName.trim(),
+              setNo: s.setNo ?? i + 1,
+              reps: intOrNull(s.reps),
+              weightKg: floatOrNull(s.weightKg),
+              durationSeconds: nonNegIntOrNull(s.durationSeconds),
+              isWarmup: Boolean(s.isWarmup),
+              rpe: intOrNull(s.rpe),
+              notes: strOrNull(s.notes),
+            })),
+        },
+        runs: runData ? { create: runData } : undefined,
+      },
+    });
+  });
+}

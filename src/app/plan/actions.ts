@@ -5,21 +5,20 @@ import { prisma } from '@/lib/prisma';
 import {
   validatePlannedSession,
   createPlannedSession,
+  saveCompletedActuals,
   intOrNull,
   floatOrNull,
   strOrNull,
-  nonNegIntOrNull,
   isValidDateIso,
   findDateClash,
   moveSessionDate,
   deleteSessionCascade,
   duplicateSession,
-  type ActualSetInput,
   type CompletePlanInput,
+  type CompletedRunData,
   type ClashInfo,
 } from '@/lib/plannedSessions';
 import { backToBackHardWarning, pickHrSource, normalizeHrSource } from '@/lib/rules';
-import { serializeFlowItems } from '@/lib/flowItems';
 
 export interface ActionResult {
   ok: boolean;
@@ -52,10 +51,6 @@ export async function completePlanAction(
   const plan = await prisma.session.findUnique({ where: { id: sessionId } });
   if (!plan) return { ok: false, error: 'Planned session not found.' };
 
-  const sets: ActualSetInput[] = Array.isArray(raw.strengthSets)
-    ? raw.strengthSets
-    : [];
-
   // Back-to-back-hard warning vs every OTHER session (flag, never block).
   const others = await prisma.session.findMany({
     where: { id: { not: sessionId } },
@@ -67,7 +62,7 @@ export async function completePlanAction(
 
   // Resolve HR provenance for the run, if any.
   let hrPickWarning: string | null = null;
-  let runData: CompleteRunData | null = null;
+  let runData: CompletedRunData | null = null;
   if (raw.run && (raw.run.avgHr != null || raw.run.distanceKm != null || raw.run.hrSource)) {
     const pick = pickHrSource([raw.run.hrSource]);
     hrPickWarning = pick.warning;
@@ -83,43 +78,8 @@ export async function completePlanAction(
     };
   }
 
-  await prisma.$transaction(async (tx) => {
-    // Replace any prior actuals (idempotent re-save) then write the new ones.
-    await tx.strengthSet.deleteMany({ where: { sessionId } });
-    await tx.run.deleteMany({ where: { sessionId } });
-
-    await tx.session.update({
-      where: { id: sessionId },
-      data: {
-        status: 'completed',
-        durationMin: intOrNull(raw.durationMin),
-        energyPre: intOrNull(raw.energyPre),
-        rpeOverall: intOrNull(raw.rpeOverall),
-        // cooldownDone is persisted live from the logger's cool-down block, so
-        // only overwrite it when the finish step explicitly sends a value.
-        ...(raw.cooldownDone !== undefined ? { cooldownDone: Boolean(raw.cooldownDone) } : {}),
-        // Persist logged warm-up / cool-down items (ticks + actual weights).
-        ...(raw.warmup !== undefined ? { warmup: serializeFlowItems(raw.warmup) } : {}),
-        ...(raw.cooldown !== undefined ? { cooldown: serializeFlowItems(raw.cooldown) } : {}),
-        notes: strOrNull(raw.notes) ?? plan.notes,
-        strengthSets: {
-          create: sets
-            .filter((s) => s.exerciseName?.trim())
-            .map((s, i) => ({
-              exerciseName: s.exerciseName.trim(),
-              setNo: s.setNo ?? i + 1,
-              reps: intOrNull(s.reps),
-              weightKg: floatOrNull(s.weightKg),
-              durationSeconds: nonNegIntOrNull(s.durationSeconds),
-              isWarmup: Boolean(s.isWarmup),
-              rpe: intOrNull(s.rpe),
-              notes: strOrNull(s.notes),
-            })),
-        },
-        runs: runData ? { create: runData } : undefined,
-      },
-    });
-  });
+  // Replace any prior actuals (idempotent re-save) then write the new ones.
+  await saveCompletedActuals(prisma, sessionId, raw, runData, plan.notes);
 
   revalidatePath('/');
   revalidatePath('/plan');
@@ -205,15 +165,4 @@ export async function deleteSessionAction(sessionId: number): Promise<ActionResu
   revalidatePath('/');
   revalidatePath('/plan');
   return { ok: true };
-}
-
-interface CompleteRunData {
-  distanceKm: number | null;
-  durationMin: number | null;
-  avgPace: string | null;
-  avgHr: number | null;
-  maxHr: number | null;
-  hrSource: string | null;
-  calfRaisesDone: boolean;
-  notes: string | null;
 }

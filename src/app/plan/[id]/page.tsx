@@ -132,7 +132,6 @@ export default async function PlannedSessionPreview({
   }
 
   const totalSets = exs.reduce((a, e) => a + (e.targetSets ?? 0), 0);
-  const isCompleted = session.status === 'completed';
 
   return (
     <>
@@ -161,13 +160,6 @@ export default async function PlannedSessionPreview({
         <div className="h1-lg" style={{ marginTop: 12 }}>{session.title || `${session.type} session`}</div>
         {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}>{session.notes}</div>}
       </div>
-
-      {isCompleted && (
-        <div className="note note-accent" style={{ marginTop: 16 }}>
-          <span className="msr-fill">check_circle</span>
-          Already logged. Opening the logger again will let you overwrite the recorded actuals.
-        </div>
-      )}
 
       {/* Totals */}
       <div className="stat-row" style={{ marginTop: 18 }}>
@@ -250,7 +242,7 @@ export default async function PlannedSessionPreview({
       <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40, maxWidth: 460, margin: '0 auto', padding: '14px 18px calc(26px + env(safe-area-inset-bottom))', background: 'var(--footer-bg)', borderTop: '1px solid var(--border)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)' }}>
         <Link href={`/plan/${session.id}/log`} className="btn btn-lg">
           <span className="msr-fill" style={{ fontSize: 22 }}>play_arrow</span>
-          {isCompleted ? 'Open logger' : 'Start session'}
+          Start session
         </Link>
       </div>
     </>
