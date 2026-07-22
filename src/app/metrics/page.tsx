@@ -19,6 +19,16 @@ export default async function MetricsPage() {
           <div className="h1">Progress</div>
           <div className="sub">Your real logged data</div>
         </div>
+        <div style={{ flex: 1 }} />
+        {/* Scan capture lives here now (L1) — the "+" tab opens the daily loop. */}
+        <Link
+          href="/inbody"
+          className="btn-sm"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 44, borderRadius: 13, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', textDecoration: 'none' }}
+        >
+          <span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">photo_camera</span>
+          Add a scan
+        </Link>
       </div>
 
       {/* Body weight */}

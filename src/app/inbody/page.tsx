@@ -14,19 +14,11 @@ interface Extracted {
   raw: Record<string, unknown>;
 }
 
-const TYPES = [
-  { icon: 'monitor_weight', label: 'InBody scan' },
-  { icon: 'screenshot', label: 'Health screenshot' },
-  { icon: 'assignment', label: 'Class board' },
-  { icon: 'accessibility_new', label: 'Progress photo' },
-];
-
 export default function CapturePage() {
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [typeIdx, setTypeIdx] = useState(0);
   const [extracting, setExtracting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,7 +78,9 @@ export default function CapturePage() {
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error || 'Save failed');
-      router.push('/');
+      // Scan capture is entered from Metrics ("Add a scan", L1) — return there
+      // so the new checkpoint is visible immediately.
+      router.push('/metrics');
     } catch (e) {
       setError((e as Error).message);
       setSaving(false);
@@ -98,7 +92,7 @@ export default function CapturePage() {
   return (
     <>
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 9, padding: '10px 2px 8px' }}>
-        <button className="icon-btn" onClick={() => router.push('/')}><span className="msr">close</span></button>
+        <button className="icon-btn" onClick={() => router.push('/metrics')} aria-label="Close"><span className="msr">close</span></button>
         <div style={{ flex: 1 }} />
       </div>
 
@@ -142,18 +136,6 @@ export default function CapturePage() {
             {extracting ? <span className="spin" /> : <><span className="msr-fill" style={{ fontSize: 20 }}>auto_awesome</span>Extract with Claude</>}
           </button>
         )}
-
-        {/* type chips (visual) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '24px 2px 12px' }}>
-          <div className="h2">What is it?</div>
-        </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {TYPES.map((t, i) => (
-            <div key={t.label} className={`chip ${i === typeIdx ? 'active' : ''}`} style={{ height: 40, padding: '0 14px', borderRadius: 13, fontSize: 13 }} onClick={() => setTypeIdx(i)}>
-              <span className="msr-fill" style={{ fontSize: 17 }}>{t.icon}</span>{t.label}
-            </div>
-          ))}
-        </div>
 
         {/* confirm / edit values */}
         <div className="section-head"><div className="h2">Values {extracted ? '· confirm' : '· manual'}</div></div>

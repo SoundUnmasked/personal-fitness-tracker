@@ -367,8 +367,9 @@ textarea { resize: vertical; min-height: 42px; line-height: 1.4; }
 .tabbar .tab-ico { font-size: 23px; }
 .tabbar .tab-lbl { font-size: 8.5px; font-weight: 600; letter-spacing: 0.04em; }
 .tabbar .fab-slot { flex: 1; display: flex; justify-content: center; }
+/* Plain press state (L1): shrink in place — no jump. */
 .fab { transition: transform 0.07s ease; -webkit-tap-highlight-color: transparent; }
-.fab:active { transform: translateY(-24px) scale(0.92); }
+.fab:active { transform: scale(0.92); }
 
 /* --- "Session in progress" mini-bar (item 4) ------------------------------ */
 /* Fixed, sits just above the tab bar. The app shell adds matching bottom
