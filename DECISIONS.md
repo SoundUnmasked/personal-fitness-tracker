@@ -6,6 +6,37 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package L1 — interaction polish
+
+- **Pause is a single-tap toggle.** The full-screen PAUSED interstitial is gone;
+  the header button flips pause/resume (icon + tint change, clock dims and
+  shows "· PAUSED"). Consequence: the interstitial's "Restart: clear progress"
+  action lost its only entry point and was removed with its confirm dialog —
+  the same outcome is one tap further away via Discard (clears the draft) and
+  re-opening the logger fresh. The exit options are unchanged and live only on
+  the back/exit flow.
+- **Discard confirms once, not twice**, and is now LOCAL-ONLY: it clears the
+  on-device draft and never calls the server. This matches the brief's stated
+  model ("discard only clears the local draft; no DB rows are touched") and is
+  what makes single-tap discard safe. Behaviour change vs the old
+  `discardSessionAction` path: discarding while re-logging a COMPLETED session
+  now leaves the saved actuals and completed status untouched (cancel-edit
+  semantics) instead of deleting them and reverting the session to planned.
+  `discardSessionAction` is kept in `actions.ts` (unused by the UI) for
+  tooling; sheet copy updated to say nothing saved is touched.
+- **Exit sheet touch targets:** every control ≥44px (choices min 60px, Back
+  50px, close 44px, 12px spacing), consistent with the logger's large buttons.
+- **"+" tab = daily loop** via a new `/today` redirect page (today's planned
+  session → `/plan/<id>`, else `/plan/new`), evaluated per tap (force-dynamic,
+  same local-midnight window as Home). Scan capture moved behind an
+  "Add a scan" button on Metrics; the capture page's decorative type chips
+  (incl. the equally decorative "InBody scan" chip — none of them did
+  anything) were deleted, and its close/save now return to Metrics instead of
+  Home, matching the new entry point. The FAB press state no longer jumps
+  (`translateY(-24px)` removed; plain in-place scale).
+
+---
+
 # Package H — data truth and gym resilience
 
 - **Finish saves ONLY ticked sets.** The old save filter ("row has a value")

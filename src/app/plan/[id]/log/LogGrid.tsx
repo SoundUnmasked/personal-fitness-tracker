@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { completePlanAction, discardSessionAction } from '../../actions';
+import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
 import type { FlowItem } from '@/lib/flowItems';
@@ -141,9 +141,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // keypad once the user taps a cell (tap() sets it to 'entry').
   const [panel, setPanel] = useState<'entry' | 'rest' | 'tempo' | 'hidden'>('hidden');
   const [resumeToast, setResumeToast] = useState(false); // brief "Resumed" confirmation
-  const [paused, setPaused] = useState(false);           // explicit in-session pause overlay
-  const [confirmRestart, setConfirmRestart] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [paused, setPaused] = useState(false);           // single-tap pause toggle (header)
   const [exitOpen, setExitOpen] = useState(false);       // back-out choices sheet (item 3)
   const [editEx, setEditEx] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ ei: number; si: number } | null>(null);
@@ -425,7 +423,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
   function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
-  // --- pause / resume / restart (items 4/5) ---------------------------------
+  // --- pause / resume (single-tap toggle in the header, L1) ------------------
   function pauseSession() {
     unlockAudio();
     restWasRunning.current = rest.running;
@@ -440,24 +438,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (restWasRunning.current) { restEndAt.current = Date.now() + rest.remaining * 1000; setRest((r) => ({ ...r, running: true })); runRestInterval(); }
     if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
     saveSessionDraft(buildDraft(undefined, false));
-  }
-  function restartSession() {
-    const fresh = plan.exercises.map(initSets);
-    setSets(fresh);
-    setActive({ ei: 0, si: 0, field: 'kg' });
-    if (restTimer.current) { clearInterval(restTimer.current); restTimer.current = null; }
-    cancelRestNotification();
-    const s0 = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS;
-    setRest({ running: false, remaining: s0, total: s0 });
-    if (swTimer.current) { clearInterval(swTimer.current); swTimer.current = null; }
-    swElapsed.current = 0; setSw({ running: false, elapsed: 0 });
-    setElapsed(0);
-    setEditEx(null);
-    setPanel('hidden');
-    setConfirmRestart(false);
-    setPaused(false);
-    // Session continues (still in progress), just cleared — keep a fresh draft.
-    saveSessionDraft({ v: 2, sessionId: plan.id, title: plan.title, sets: fresh, warmup: warmupRef.current, cooldown: cooldownRef.current, active: { ei: 0, si: 0, field: 'kg' }, elapsed: 0, paused: false, updatedAt: Date.now() });
   }
 
   // --- duration count-up ----------------------------------------------------
@@ -606,13 +586,15 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     router.push(`/plan/${plan.id}`);
   }
   function endSaveFinish() { setExitOpen(false); setFinishing(true); }
-  async function endDiscard() {
+  // Discard = throw away THIS attempt's local draft only. Nothing in the DB is
+  // touched (actuals are only ever written on Finish), which is why a single
+  // clearly-labelled red action needs no extra confirmation step.
+  function endDiscard() {
     clearedRef.current = true;
     clearSessionDraft(plan.id);
     releaseWake();
     cancelRestNotification();
     setExitOpen(false);
-    await discardSessionAction(plan.id);
     router.push(`/plan/${plan.id}`);
   }
 
@@ -637,10 +619,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
-            {plan.type} · <span style={{ color: 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>
+            {plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>
+            {paused && <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}> · PAUSED</span>}
           </div>
         </div>
-        <button className="icon-btn" onClick={pauseSession} aria-label="Pause session"><span className="msr" aria-hidden="true">pause</span></button>
+        <button
+          className="icon-btn"
+          onClick={() => (paused ? resumeSession() : pauseSession())}
+          aria-label={paused ? 'Resume session' : 'Pause session'}
+          aria-pressed={paused}
+          style={paused ? { background: 'var(--accent-soft)', color: 'var(--accent)', borderColor: 'var(--accent-line)' } : undefined}
+        ><span className="msr" aria-hidden="true">{paused ? 'play_arrow' : 'pause'}</span></button>
         <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>Finish</button>
       </div>
 
@@ -895,17 +884,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         )}
       </div>
 
-      {/* Paused / Continue overlay (items 4/5) */}
-      {paused && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 70, background: 'rgba(0,0,0,0.62)', backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14, padding: 24 }}>
-          <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: '0.14em', color: 'var(--text-faint)' }}>PAUSED</div>
-          <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', color: 'var(--text)', fontVariantNumeric: 'tabular-nums' }}>{mmss(elapsed)}</div>
-          <div style={{ fontSize: 12.5, color: 'var(--text-dim)', textAlign: 'center', maxWidth: 260 }}>{doneCount} of {totalCount} sets logged · saved automatically</div>
-          <button className="btn" style={{ maxWidth: 300, width: '100%', marginTop: 6 }} onClick={resumeSession}><span className="msr-fill" style={{ fontSize: 20 }}>play_arrow</span>Resume session</button>
-          <button onClick={() => setConfirmRestart(true)} style={{ ...restSmBtn, maxWidth: 300, width: '100%', flex: 'none', height: 48, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>Restart: clear progress</button>
-        </div>
-      )}
-
       {deleteTarget && (
         <ConfirmDialog
           icon="delete"
@@ -915,18 +893,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           danger
           onCancel={() => setDeleteTarget(null)}
           onConfirm={() => deleteSet(deleteTarget.ei, deleteTarget.si)}
-        />
-      )}
-
-      {confirmRestart && (
-        <ConfirmDialog
-          icon="restart_alt"
-          title="Restart this session?"
-          body="This clears every set you've logged in this session and starts over. This can't be undone."
-          confirmLabel="Clear & restart"
-          danger
-          onCancel={() => setConfirmRestart(false)}
-          onConfirm={restartSession}
         />
       )}
 
@@ -1081,8 +1047,11 @@ function FlowProse({ kind, text }: { kind: 'warmup' | 'cooldown'; text: string }
 }
 
 // --- Back-out sheet (item 3) --------------------------------------------------
-// Three top-level choices; "End session" reveals two sub-choices, and Discard
-// sits behind an explicit warning.
+// Three top-level choices; "End session" reveals two sub-choices. Discard acts
+// immediately: it is red, clearly labelled, and only clears the LOCAL draft
+// (actuals are only written on Finish), so no extra confirmation step (L1).
+// All tap targets are ≥44px for mid-workout use, matching the logger's large
+// buttons.
 function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onSaveFinish, onDiscard }: {
   elapsed: string;
   progress: string;
@@ -1092,13 +1061,13 @@ function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onS
   onSaveFinish: () => void;
   onDiscard: () => void;
 }) {
-  const [view, setView] = useState<'main' | 'end' | 'discard'>('main');
+  const [view, setView] = useState<'main' | 'end'>('main');
   const Choice = ({ icon, title, body, onClick, danger }: { icon: string; title: string; body: string; onClick: () => void; danger?: boolean }) => (
-    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', padding: '13px 14px', borderRadius: 14, border: `1px solid ${danger ? 'var(--err-line)' : 'var(--border)'}`, background: danger ? 'var(--err-tint)' : 'var(--surface)', cursor: 'pointer', color: danger ? 'var(--err-text)' : 'var(--text)' }}>
-      <span className="msr-fill" style={{ fontSize: 22, color: danger ? 'var(--err-text)' : 'var(--accent)', flex: 'none' }} aria-hidden="true">{icon}</span>
+    <button onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 13, width: '100%', minHeight: 60, textAlign: 'left', padding: '15px 16px', borderRadius: 15, border: `1px solid ${danger ? 'var(--err-line)' : 'var(--border)'}`, background: danger ? 'var(--err-tint)' : 'var(--surface)', cursor: 'pointer', color: danger ? 'var(--err-text)' : 'var(--text)' }}>
+      <span className="msr-fill" style={{ fontSize: 24, color: danger ? 'var(--err-text)' : 'var(--accent)', flex: 'none' }} aria-hidden="true">{icon}</span>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>{title}</div>
-        <div style={{ fontSize: 11.5, color: danger ? 'var(--err-text)' : 'var(--text-faint)', marginTop: 1, lineHeight: 1.35 }}>{body}</div>
+        <div style={{ fontSize: 14.5, fontWeight: 700 }}>{title}</div>
+        <div style={{ fontSize: 12, color: danger ? 'var(--err-text)' : 'var(--text-faint)', marginTop: 2, lineHeight: 1.35 }}>{body}</div>
       </div>
     </button>
   );
@@ -1106,13 +1075,13 @@ function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onS
     <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 75, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTop: '1px solid var(--border)', padding: '18px 18px calc(26px + env(safe-area-inset-bottom))' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-          <div className="h2">{view === 'discard' ? 'Discard session?' : view === 'end' ? 'End session' : 'Leave session?'}</div>
-          <button className="icon-btn dim" onClick={onClose} aria-label="Close"><span className="msr" aria-hidden="true">close</span></button>
+          <div className="h2">{view === 'end' ? 'End session' : 'Leave session?'}</div>
+          <button className="icon-btn dim" onClick={onClose} aria-label="Close" style={{ width: 44, height: 44 }}><span className="msr" aria-hidden="true">close</span></button>
         </div>
         <div className="sub" style={{ marginBottom: 16 }}>{elapsed} elapsed · {progress} sets logged</div>
 
         {view === 'main' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Choice icon="play_circle" title="Keep session running" body="Timers keep running. A bar keeps this session one tap away." onClick={onKeepRunning} />
             <Choice icon="bookmark" title="Save and come back later" body="Pauses and saves your progress. Resume any time from the session bar." onClick={onSaveLater} />
             <Choice icon="stop_circle" title="End session" body="Finish and save, or discard this attempt." onClick={() => setView('end')} />
@@ -1120,21 +1089,11 @@ function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onS
         )}
 
         {view === 'end' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <Choice icon="check_circle" title="Save and finish" body="Keeps every logged set and marks the session complete." onClick={onSaveFinish} />
-            <Choice icon="delete" title="Discard session" body="Throws away this attempt and returns the session to planned." danger onClick={() => setView('discard')} />
-            <button onClick={() => setView('main')} style={{ ...restSmBtn, height: 46, marginTop: 2 }}>Back</button>
-          </div>
-        )}
-
-        {view === 'discard' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div className="note note-err" style={{ marginBottom: 2 }}>
-              <span className="msr-fill" aria-hidden="true">warning</span>
-              This clears every set logged in this session and returns it to planned. This can&apos;t be undone.
-            </div>
-            <button onClick={onDiscard} style={{ ...restSmBtn, height: 50, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)', fontWeight: 700 }}>Discard &amp; return to planned</button>
-            <button onClick={() => setView('end')} style={{ ...restSmBtn, height: 46 }}>Keep my progress</button>
+            <Choice icon="delete" title="Discard this attempt" body="Clears the sets logged on this phone for this attempt. Nothing already saved is touched." danger onClick={onDiscard} />
+            {/* flex:'none' — restSmBtn's flex:1 collapses the height inside this column flexbox */}
+            <button onClick={() => setView('main')} style={{ ...restSmBtn, flex: 'none', height: 50, marginTop: 2 }}>Back</button>
           </div>
         )}
       </div>

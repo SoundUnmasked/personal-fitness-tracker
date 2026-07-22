@@ -3,7 +3,8 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 
-// The five persistent tabs. The centre is a raised FAB (capture / add).
+// The five persistent tabs. The centre is a raised FAB that opens the daily
+// loop: today's planned session, or new-session creation if none exists (L1).
 const tabs = [
   { href: '/', label: 'HOME', icon: 'home' },
   { href: '/plan', label: 'CALENDAR', icon: 'calendar_month' },
@@ -42,8 +43,8 @@ export default function BottomNav() {
       <div className="fab-slot">
         <button
           className="fab"
-          aria-label="Capture / add"
-          onClick={() => router.push('/inbody')}
+          aria-label="Today's session"
+          onClick={() => router.push('/today')}
         >
           <span className="msr-fill">add</span>
         </button>
