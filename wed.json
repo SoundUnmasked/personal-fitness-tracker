@@ -1,0 +1,29 @@
+{
+  "type": "Power",
+  "date": "2026-07-22",
+  "title": "Power (Upper): PACE [W6, D1]",
+  "location": "Third Space Wimbledon",
+  "warmup": [
+    { "name": "IAP breathing", "detail": "5 breaths x 2-3 sets" },
+    { "name": "Toe yoga", "detail": "2 min" },
+    { "name": "Ski erg easy", "detail": "3 min" },
+    { "name": "Scapular CARs", "detail": "x10" },
+    { "name": "Band pull-aparts", "detail": "x15" },
+    { "name": "Thoracic rotations", "detail": "x8 per side" },
+    { "name": "Empty bar push press", "detail": "x10" },
+    { "name": "Push press ramp", "detail": "25kg x5, 35kg x3, 45kg x1" }
+  ],
+  "cooldown": [
+    { "name": "Walk", "detail": "5 min" }
+  ],
+  "exercises": [
+    { "name": "Explosive Push Press", "sets": 4, "reps": 5, "weightKg": 55, "restSeconds": 180, "setStyle": "reps", "notes": "Bar speed is the instruction. 55kg is the ceiling, not the target. Drop to 50kg if set 1 moves badly." },
+    { "name": "Barbell Row", "sets": 4, "reps": 5, "weightKg": 60, "restSeconds": 150, "setStyle": "reps" },
+    { "name": "Weighted Pull-Up", "sets": 3, "reps": 6, "weightKg": 5, "restSeconds": 120, "setStyle": "reps", "notes": "Go +7.5kg on set 3 if reps are clean." },
+    { "name": "Dead Hang", "sets": 2, "restSeconds": 90, "setStyle": "duration", "durationSeconds": 45, "notes": "Max duration each set. Log seconds held." },
+    { "name": "Incline DB Bench", "sets": 3, "reps": 10, "weightKg": 22, "restSeconds": 0, "setStyle": "reps", "tempo": "303", "superset": "A", "notes": "8 to 10 reps. No rest, straight into the row." },
+    { "name": "Chest-Supported DB Row", "sets": 3, "reps": 12, "weightKg": 14, "restSeconds": 90, "setStyle": "reps", "tempo": "303", "superset": "A", "notes": "10 to 12 reps. Rest 90s after the pair." },
+    { "name": "Eccentric Calf Raises", "sets": 3, "reps": 15, "restSeconds": 60, "setStyle": "reps", "tempo": "3010" }
+  ],
+  "notes": "Session moved from Tue 21 to Wed 22. Grip block: hang only, carry dropped."
+}
