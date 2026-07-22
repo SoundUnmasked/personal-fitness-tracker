@@ -6,6 +6,34 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package H — data truth and gym resilience
+
+- **Finish saves ONLY ticked sets.** The old save filter ("row has a value")
+  matched every row because rows pre-fill from targets, fabricating history and
+  poisoning the "last time" pre-fills. The tick is now the sole completion
+  signal (`tickedStrengthSets()` in `plannedSessions.ts`, unit + DB tested).
+  Unticked rows are dropped entirely — no ghost or zero rows. A ticked row with
+  empty fields IS saved (the tick is the user's assertion, e.g. bodyweight work
+  with no reps typed). "Mark all as done" lives in the Finish sheet, shown only
+  while sets are unticked; it ticks every row including manually added warm-ups.
+- **Duration** = the logger's session clock at Finish, rounded to whole minutes
+  with a 1-minute floor once the clock has run; a 0-second session stores null.
+- **Timer restore fix:** the draft's elapsed was restored into React state but
+  the wall-clock anchor (`elapsedClock`) kept base 0, so the first tick wiped
+  the clock. The hydrate effect now re-anchors ref + base synchronously.
+- **Completed view** gained "Edit logged sets" (opens the existing logger;
+  re-finishing overwrites actuals — already idempotent server-side). The
+  "Already logged…" notice was dead code on the planned page (the completed
+  branch returns before it); it moved into `CompletedView` where it renders.
+  Editing pre-fills from targets, not saved actuals, and requires re-ticking —
+  accepted for this package (same data-truth rule).
+- **Offline Finish:** any thrown server-action call (fetch failure) shows the
+  fixed no-signal message and keeps the on-device draft so Finish can simply be
+  tapped again. Deliberately NO background retry or sync queue (per brief). A
+  server-side failure still returns `{ok:false}` and shows its own error.
+
+---
+
 # Session 2 — Resume build (planned sessions, Turso, hook, export, rule amendments)
 
 **Context correction:** the resume brief said a prior session had already built

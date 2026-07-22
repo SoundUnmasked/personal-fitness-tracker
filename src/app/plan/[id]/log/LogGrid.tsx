@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { completePlanAction, discardSessionAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
+import { tickedStrengthSets } from '@/lib/plannedSessions';
 import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
@@ -225,7 +226,15 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (d && Array.isArray(d.sets) && d.sets.length) {
       setSets(d.sets.map((rows) => rows.map((r) => ({ ...emptyRow(), ...r }))));
       if (d.active) setActive(d.active);
-      if (typeof d.elapsed === 'number') setElapsed(d.elapsed);
+      if (typeof d.elapsed === 'number') {
+        // Restore the session clock AND re-anchor its wall-clock base
+        // synchronously. The ticking effect captured base=0 from elapsedRef
+        // before this state update lands, so without re-anchoring the first
+        // tick recomputes from 0 and wipes the restored value back to 0:00.
+        setElapsed(d.elapsed);
+        elapsedRef.current = d.elapsed;
+        elapsedClock.current = { base: d.elapsed, since: Date.now() };
+      }
       if (Array.isArray(d.warmup)) setWarmup(d.warmup);
       if (Array.isArray(d.cooldown)) setCooldown(d.cooldown);
       // Auto-resume (never open into a paused interstitial). Only flash the
@@ -511,6 +520,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     startRest(restFor(active.ei));
   }
   const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, emptyRow(false)] : rows));
+
+  // One tap for "everything went as planned": tick every set so Finish saves
+  // the whole session. Offered from the Finish sheet when sets are unticked.
+  const markAllDone = useCallback(() => {
+    unlockAudio();
+    updateSets((all) => all.map((rows) => rows.map((r) => r.done ? r : { ...r, done: true })));
+  }, [updateSets]);
 
   // Item 6: warm-up (ramp-up) sets sit ABOVE set 1 and never consume a working
   // set number. Keep them physically leading in the row array so array order ==
@@ -920,7 +936,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           sets={sets}
           warmup={warmup}
           cooldown={cooldown}
-          progress={`${doneCount}/${totalCount}`}
+          doneCount={doneCount}
+          totalCount={totalCount}
+          elapsed={elapsed}
+          onMarkAllDone={markAllDone}
           onClose={() => setFinishing(false)}
           onSaved={finishNow}
         />
@@ -1267,12 +1286,20 @@ function exerciseLabel(groups: Group[], gi: number, pos: number): string {
 }
 
 // --- Finish wrap-up sheet ----------------------------------------------------
-function FinishSheet({ plan, sets, warmup, cooldown, progress, onClose, onSaved }: {
+// Shown offline / when the server action can't be reached. The draft is left
+// untouched on-device, so tapping Finish again simply retries the same save.
+const OFFLINE_FINISH_MSG =
+  'No signal. Your session is saved on this phone. Tap Finish again when you’re back online.';
+
+function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elapsed, onMarkAllDone, onClose, onSaved }: {
   plan: LogPlan;
   sets: SetRow[][];
   warmup: FlowItem[];
   cooldown: FlowItem[];
-  progress: string;
+  doneCount: number;
+  totalCount: number;
+  elapsed: number; // session seconds — saved as the session's duration
+  onMarkAllDone: () => void;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1291,33 +1318,32 @@ function FinishSheet({ plan, sets, warmup, cooldown, progress, onClose, onSaved 
 
   async function save() {
     setSaving(true); setError(null);
-    // setNo counts WORKING sets from 1; warm-up sets carry setNo 0 and the flag.
-    const strengthSets = plan.exercises.flatMap((ex, ei) => {
-      let workNo = 0;
-      return sets[ei].filter((s) => s.kg || s.reps || s.rpe || s.dur).map((s) => {
-        if (!s.warmup) workNo += 1;
-        return {
-          exerciseName: ex.name, setNo: s.warmup ? 0 : workNo,
-          reps: s.reps ? Number(s.reps) : null,
-          weightKg: s.kg ? Number(s.kg) : null,
-          durationSeconds: s.dur ? Number(s.dur) : null,
-          isWarmup: s.warmup,
-          rpe: s.rpe ? Number(s.rpe) : null,
-        };
-      });
-    });
+    // Data truth: ONLY ticked sets are saved. Rows pre-fill from targets, so a
+    // value alone proves nothing — unticked rows are dropped (no ghost rows).
+    const strengthSets = tickedStrengthSets(plan.exercises, sets);
     const run = plan.hasRun ? {
       distanceKm: distanceKm ? Number(distanceKm) : null,
       avgHr: avgHr ? Number(avgHr) : null,
       hrSource: hrSource || null,
     } : null;
-    const res = await completePlanAction(plan.id, {
-      rpeOverall: rpeOverall ? Number(rpeOverall) : null,
-      energyPre: energyPre ? Number(energyPre) : null,
-      ...(showCooldownPrompt ? { cooldownDone } : {}),
-      warmup, cooldown,
-      notes: notes || null, strengthSets, run,
-    });
+    let res;
+    try {
+      res = await completePlanAction(plan.id, {
+        // Session clock → stored duration (whole minutes, ≥1 once started).
+        durationMin: elapsed > 0 ? Math.max(1, Math.round(elapsed / 60)) : null,
+        rpeOverall: rpeOverall ? Number(rpeOverall) : null,
+        energyPre: energyPre ? Number(energyPre) : null,
+        ...(showCooldownPrompt ? { cooldownDone } : {}),
+        warmup, cooldown,
+        notes: notes || null, strengthSets, run,
+      });
+    } catch {
+      // The action call never reached the server (offline / no signal). The
+      // draft is still on-device, so a later Finish retries cleanly.
+      setError(OFFLINE_FINISH_MSG);
+      setSaving(false);
+      return;
+    }
     if (!res.ok) { setError(res.error ?? 'Could not save'); setSaving(false); return; }
     if (res.warning) { setWarning(res.warning); setTimeout(onSaved, 2200); return; }
     onSaved();
@@ -1330,7 +1356,24 @@ function FinishSheet({ plan, sets, warmup, cooldown, progress, onClose, onSaved 
           <div className="h2">Finish session</div>
           <button className="icon-btn dim" onClick={onClose} aria-label="Close"><span className="msr" aria-hidden="true">close</span></button>
         </div>
-        <div className="sub" style={{ marginBottom: 16 }}>{progress} sets logged</div>
+        <div className="sub" style={{ marginBottom: 16 }}>{doneCount} of {totalCount} sets ticked · only ticked sets are saved</div>
+
+        {doneCount < totalCount && (
+          <div className="card card-tinted" style={{ padding: '12px 14px', marginBottom: 14 }}>
+            <div style={{ fontSize: 12.5, lineHeight: 1.4, color: 'var(--text-dim)' }}>
+              {totalCount - doneCount} unticked set{totalCount - doneCount === 1 ? '' : 's'} won&apos;t be saved.
+              Did everything as planned?
+            </div>
+            <button
+              className="btn-sm"
+              onClick={onMarkAllDone}
+              style={{ marginTop: 10, height: 38, width: '100%', background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+            >
+              <span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">done_all</span>
+              Mark all as done
+            </button>
+          </div>
+        )}
 
         {error && <div className="note note-err">{error}</div>}
         {warning && <div className="note note-accent"><span className="msr-fill">warning</span>{warning}</div>}

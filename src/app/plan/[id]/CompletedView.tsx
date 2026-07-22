@@ -96,6 +96,20 @@ export default function CompletedView({ session }: { session: CompletedSession }
         </div>
       )}
 
+      {/* Edit logged actuals: reopens the logger; finishing again overwrites. */}
+      <div className="note note-accent" style={{ marginTop: 16, marginBottom: 0 }}>
+        <span className="msr-fill" aria-hidden="true">check_circle</span>
+        Already logged. Opening the logger again will let you overwrite the recorded actuals.
+      </div>
+      <Link
+        href={`/plan/${session.id}/log`}
+        className="btn"
+        style={{ marginTop: 10, height: 46, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}
+      >
+        <span className="msr-fill" style={{ fontSize: 19 }} aria-hidden="true">edit_note</span>
+        Edit logged sets
+      </Link>
+
       {/* Structured warm-up */}
       <StructuredBlock kind="warmup" raw={session.warmup} />
 
