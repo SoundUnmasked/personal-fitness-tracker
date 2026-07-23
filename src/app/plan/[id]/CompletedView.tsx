@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { shortDate, isoDate } from '@/lib/format';
+import { shortDate, isoDate, fmtClock, fmtClockFromMinutes } from '@/lib/format';
 import StructuredBlock from '@/components/StructuredBlock';
 import SessionActions from '@/components/SessionActions';
 
@@ -85,7 +85,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       <div className="stat-row" style={{ marginTop: 18 }}>
         <Total icon="local_fire_department" value={session.type} label="type" />
         <Total icon="fitness_center" value={String(groups.length || (run ? 1 : 0))} label={run && groups.length === 0 ? 'run' : 'exercises'} />
-        <Total icon="schedule" value={session.durationMin ? `${session.durationMin}m` : '·'} label="duration" />
+        <Total icon="schedule" value={session.durationMin ? fmtClockFromMinutes(session.durationMin) : '·'} label="duration" />
       </div>
 
       {/* Session meta chips */}
@@ -121,7 +121,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
           <div className="card card-md">
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px 24px' }}>
               <Metric label="Distance" value={run.distanceKm != null ? `${run.distanceKm} km` : '·'} />
-              <Metric label="Duration" value={run.durationMin != null ? `${Math.round(run.durationMin)} min` : '·'} />
+              <Metric label="Duration" value={run.durationMin != null ? fmtClockFromMinutes(run.durationMin) : '·'} />
               <Metric label="Pace" value={run.avgPace || '·'} />
               <Metric label="Avg HR" value={run.avgHr != null ? `${run.avgHr} bpm` : '·'} />
               <Metric label="Max HR" value={run.maxHr != null ? `${run.maxHr} bpm` : '·'} />
@@ -154,7 +154,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
                       <div style={{ width: 22, flex: 'none', fontSize: 12, fontWeight: 700, color: 'var(--text-faint)' }}>{s.setNo}</div>
                       <div style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}>
                         {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>·</span> : null}
-                        {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{s.durationSeconds}s</span>}
+                        {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{fmtClock(s.durationSeconds)}</span>}
                         {s.reps != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> × {s.reps}</span>}
                         {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}{s.rpeHigh != null ? `-${s.rpeHigh}` : ''}</span>}
                       </div>

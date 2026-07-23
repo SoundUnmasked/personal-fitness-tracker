@@ -6,6 +6,49 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package N — timer system rework
+
+- **Ongoing rest notification (item 1).** While a countdown runs we show ONE
+  persistent notification (tag `pft-rest`) whose body is the rest END TIME, not
+  a live countdown — a live countdown would freeze when the JS timer is
+  throttled in the background, whereas an absolute end time stays useful. It's
+  `silent` (the audible cue is the in-app chime) and closed on
+  complete/skip/pause/finish. We deleted the old end-of-rest notification and
+  the dead `TimestampTrigger`/`showTrigger` path (Notification Triggers was
+  removed from Chromium). **Honest limits:** because web pages can't run a
+  reliable background timer, when the app is backgrounded the notification may
+  linger a few seconds past the true end until you refocus the app (which
+  closes it); and permission-denied degrades to in-app-only silently.
+- **Always-visible rest strip (item 2).** A fixed top strip shows the remaining
+  rest whenever a countdown/count-up is running, so it stays visible with the
+  keypad open, while tapping other sets, and while scrolled. Tapping it opens
+  the rest panel; the header is offset down while it shows.
+- **Typed rest (item 3).** Tap the big rest time to type an exact duration
+  ("M:SS" or plain seconds via `parseClockInput`); plus 60/90/120/180 quick
+  presets. -15/+15 kept.
+- **Count-up timer (item 4).** The rest panel has Countdown/Count-up modes.
+  Count-up is a wall-clock-anchored open-ended stopwatch; it does not capture
+  the lag between finishing and pressing start (accepted — the user adjusts).
+- **One time format (item 5).** New `fmtClock`/`fmtClockFromMinutes` in
+  `lib/format.ts` render every time as `M:SS` (rolling to `H:MM:SS` past an
+  hour). Applied to the session clock, rest timers, the count-up, logged set
+  durations, session/run durations, and plan target times. No more "45s" /
+  "1 min" / "45m".
+- **Countdown + distinct end sound (item 6).** Audible 3-2-1 blips (one low
+  same-pitch tick per second for the last three), then a rising two-note
+  triangle-wave CHIME at zero — deliberately unlike the tempo metronome's
+  single flat sine tick, because it means "start your set", not "keep tempo".
+  **Honest limit:** WebAudio is suspended when the app is backgrounded, so the
+  end sound is reliable only when the logger is foreground (screen may be off
+  under the wake lock). Reported plainly; the notification is the background
+  affordance.
+- **Stale-draft prompt (item 7).** `SessionBar` now shows the draft age, and a
+  draft older than 24h flips to a warning treatment ("Discard this old
+  session?") with a one-tap discard (clears the local draft only; no DB rows
+  touched) and a Resume option, so stale state can't pass for live.
+
+---
+
 # Package M — logger correctness bug fixes
 
 - **Entry replaces, never appends (fix 1).** Tapping into a keypad cell arms

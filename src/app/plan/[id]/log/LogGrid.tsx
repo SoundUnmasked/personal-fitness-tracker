@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
+import { fmtClock } from '@/lib/format';
 import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
@@ -72,10 +73,36 @@ function vibrate(pattern: number | number[]): void {
 // Fix 1: focusing a native numeric input selects its content, so the first
 // keystroke replaces the old value instead of appending to it.
 const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => { try { e.currentTarget.select(); } catch { /* ignore */ } };
-// Strict metronome: every tick is identical (item 1). No vibration in the loop.
+// Strict metronome: every tempo tick is one identical flat blip.
 const TICK_FREQ = 880, TICK_DUR = 0.045, TICK_PEAK = 0.2;
-// Rest end-warning tones (item 2a): distinct at T-3 and at zero.
-const REST_WARN_FREQ = 660, REST_END_FREQ = 990;
+// Rest countdown blip (T-3/T-2/T-1): a short, low, same-pitch tick each second.
+const REST_COUNT_FREQ = 620;
+// Package N item 6: the rest-END cue must be clearly DIFFERENT from the tempo
+// tick — it means "start your set", not "keep to tempo". A rising two-note
+// chime (root -> a fifth above), which no single flat metronome blip resembles.
+function playRestEndChime(): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime;
+  const note = (freq: number, at: number, dur: number, peak = 0.3) => {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle'; // warmer than the metronome's default sine — extra separation
+      o.frequency.value = freq;
+      o.connect(g); g.connect(ctx.destination);
+      const t = t0 + at;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur + 0.02);
+      o.onended = () => { try { o.disconnect(); g.disconnect(); } catch { /* gone */ } };
+    } catch { /* audio unavailable */ }
+  };
+  note(660, 0, 0.16);      // root
+  note(990, 0.14, 0.32);   // a fifth up, held longer — unmistakably a chime
+}
 
 export interface LogExercise {
   name: string;
@@ -159,11 +186,15 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const [notifyAsk, setNotifyAsk] = useState(false);
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
-  const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s }; });
+  // Rest timer has two modes (item 4): 'down' = countdown to restEndAt; 'up' =
+  // open-ended count-up stopwatch for unstructured work. `up` holds the count.
+  const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s, mode: 'down' as 'down' | 'up', up: 0 }; });
+  const [restEditing, setRestEditing] = useState(false); // typing an exact rest (item 3)
   const [elapsed, setElapsed] = useState(0);
   const [finishing, setFinishing] = useState(false);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const restWasRunning = useRef(false);
+  const restUpStart = useRef(0); // epoch ms anchor for the count-up mode
   // Item 6: wall-clock anchors so timers survive the JS loop being throttled or
   // suspended when the tab is backgrounded. The session clock is derived from
   // (base seconds + real time since an anchor); the rest timer counts down to an
@@ -346,6 +377,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       setElapsed(c.base + Math.floor((Date.now() - c.since) / 1000));
       setRest((r) => {
         if (!r.running) return r;
+        if (r.mode === 'up') return { ...r, up: Math.max(0, Math.floor((Date.now() - restUpStart.current) / 1000)) };
         const rem = Math.max(0, Math.ceil((restEndAt.current - Date.now()) / 1000));
         if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); return { ...r, remaining: 0, running: false }; }
         return { ...r, remaining: rem };
@@ -375,12 +407,35 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }, []);
   useEffect(() => { if (panel === 'tempo' && !activeHasTempo) setPanel('entry'); }, [active.ei, activeHasTempo, panel]);
 
-  const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
+  // Item 5: one time format everywhere.
+  const mmss = fmtClock;
 
-  // --- rest-end notifications (item 2b) -------------------------------------
-  const restNotifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // --- ongoing rest notification (item 1) -----------------------------------
+  // While a rest countdown runs we show ONE ongoing (persistent) notification
+  // carrying the rest END TIME, so it stays useful even when the JS timer is
+  // throttled in the background (a live countdown would freeze; an absolute end
+  // time does not). It is auto-closed when rest completes/skips — we never fire
+  // a separate "rest over" notification.
+  function showRestNotification(endAtMs: number) {
+    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!('serviceWorker' in navigator)) return;
+    const ends = new Date(endAtMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    // `renotify`/`requireInteraction` are valid at runtime but missing from the
+    // DOM lib's NotificationOptions, so widen the type here.
+    const opts: NotificationOptions = {
+      body: `Rest ends ${ends}`,
+      tag: 'pft-rest',       // one notification, replaced not stacked
+      silent: true,          // the audible cue is the in-app chime, not this
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      renotify: false,
+      requireInteraction: true, // keep it up (best-effort) until we close it
+    } as NotificationOptions & { renotify?: boolean; requireInteraction?: boolean };
+    navigator.serviceWorker.ready.then((reg) => {
+      reg.showNotification('Resting between sets', opts).catch(() => {});
+    }).catch(() => {});
+  }
   function cancelRestNotification() {
-    if (restNotifyTimer.current) { clearTimeout(restNotifyTimer.current); restNotifyTimer.current = null; }
     try {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.ready
@@ -388,25 +443,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           .catch(() => {});
       }
     } catch { /* ignore */ }
-  }
-  function scheduleRestNotification(seconds: number) {
-    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
-    cancelRestNotification();
-    const title = 'Rest complete';
-    const opts = { body: 'Time for your next set.', tag: 'pft-rest', icon: '/icons/icon-192.png' };
-    // Prefer an OS-scheduled trigger (fires even if the app is backgrounded/
-    // closed) where supported; otherwise a setTimeout (foreground / wake-locked).
-    const hasTrigger = 'TimestampTrigger' in window && 'serviceWorker' in navigator;
-    if (hasTrigger) {
-      navigator.serviceWorker.ready.then((reg) => {
-        try {
-          // @ts-expect-error — Notification Triggers is experimental
-          reg.showNotification(title, { ...opts, showTrigger: new window.TimestampTrigger(Date.now() + seconds * 1000) }).catch(() => {});
-        } catch { /* fall through to timeout below */ }
-      }).catch(() => {});
-    } else {
-      restNotifyTimer.current = setTimeout(() => { try { new Notification(title, opts); } catch { /* ignore */ } }, seconds * 1000);
-    }
   }
   // Ask for permission gracefully (once) the first time a rest starts.
   function maybeAskNotify() {
@@ -422,7 +458,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     try { localStorage.setItem(NOTIFY_ASKED, '1'); } catch { /* ignore */ }
     if ('Notification' in window) {
       Notification.requestPermission().then((perm) => {
-        if (perm === 'granted' && rest.running && rest.remaining > 0) scheduleRestNotification(rest.remaining);
+        if (perm === 'granted' && rest.running && rest.mode === 'down' && rest.remaining > 0) showRestNotification(restEndAt.current);
       }).catch(() => {});
     }
   }
@@ -440,40 +476,84 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     restTimer.current = setInterval(() => {
       const rem = Math.max(0, Math.ceil((restEndAt.current - Date.now()) / 1000));
       setRest((r) => {
+        if (r.mode !== 'down') return r;
         if (rem === r.remaining) return r;
-        if (rem === 3 && r.remaining > 3) { playTone(REST_WARN_FREQ, 0.12, 0.22); vibrate(35); } // T-3 warning
+        // Item 6: audible 3-2-1 countdown — one blip per second for the last 3.
+        if (rem > 0 && rem <= 3 && rem < r.remaining) { playTone(REST_COUNT_FREQ, 0.07, 0.18); vibrate(25); }
         if (rem <= 0) {
           if (restTimer.current) clearInterval(restTimer.current);
-          if (r.remaining > 0) { playTone(REST_END_FREQ, 0.34, 0.3); vibrate([80, 40, 80]); } // distinct final beep
+          if (r.remaining > 0) { playRestEndChime(); vibrate([90, 50, 90]); } // distinct end chime
           cancelRestNotification();
           return { ...r, remaining: 0, running: false };
         }
         return { ...r, remaining: rem };
       });
-    }, 250);
+    }, 200);
+  }
+  // Count-up mode (item 4): a plain stopwatch, wall-clock anchored so it survives
+  // background throttling. Open-ended; the user reads and adjusts afterwards.
+  function runRestUpInterval() {
+    if (restTimer.current) clearInterval(restTimer.current);
+    restTimer.current = setInterval(() => {
+      const up = Math.max(0, Math.floor((Date.now() - restUpStart.current) / 1000));
+      setRest((r) => (r.mode === 'up' && r.running && up !== r.up ? { ...r, up } : r));
+    }, 200);
   }
   function startRest(sec: number) {
     setPanel('rest');
     restEndAt.current = Date.now() + sec * 1000;
-    setRest({ running: true, remaining: sec, total: sec });
+    setRest((r) => ({ ...r, running: true, remaining: sec, total: sec, mode: 'down' }));
     runRestInterval();
     maybeAskNotify();
-    scheduleRestNotification(sec);
+    showRestNotification(restEndAt.current);
   }
   function restAdjust(d: number) {
     setRest((r) => {
+      if (r.mode !== 'down') return r;
       const remaining = Math.max(0, r.remaining + d);
       const next = { ...r, remaining, total: Math.max(r.total, remaining) };
-      if (next.running) { restEndAt.current = Date.now() + remaining * 1000; scheduleRestNotification(remaining); }
+      if (next.running) { restEndAt.current = Date.now() + remaining * 1000; showRestNotification(restEndAt.current); }
+      return next;
+    });
+  }
+  // Item 3: set an exact rest duration by typing (seconds). Restarts the
+  // countdown from the typed value when a rest is running.
+  function setRestSeconds(sec: number) {
+    const s = Math.max(0, Math.round(sec));
+    setRest((r) => {
+      const next = { ...r, mode: 'down' as const, remaining: s, total: Math.max(s, 1) };
+      if (r.running && r.mode === 'down') {
+        restEndAt.current = Date.now() + s * 1000;
+        showRestNotification(restEndAt.current);
+      }
       return next;
     });
   }
   function restToggle() {
     unlockAudio();
+    if (rest.mode === 'up') {
+      if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
+      else { restUpStart.current = Date.now() - rest.up * 1000; setRest((r) => ({ ...r, running: true })); runRestUpInterval(); }
+      return;
+    }
     if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); }
-    else { const sec = rest.remaining > 0 ? rest.remaining : restFor(active.ei); restEndAt.current = Date.now() + sec * 1000; setRest((r) => ({ ...r, running: true, remaining: sec, total: Math.max(r.total, sec) })); runRestInterval(); maybeAskNotify(); scheduleRestNotification(sec); }
+    else { const sec = rest.remaining > 0 ? rest.remaining : restFor(active.ei); restEndAt.current = Date.now() + sec * 1000; setRest((r) => ({ ...r, running: true, remaining: sec, total: Math.max(r.total, sec) })); runRestInterval(); maybeAskNotify(); showRestNotification(restEndAt.current); }
   }
-  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
+  // Switch between countdown and count-up. Stops the clock on switch; the user
+  // presses start for the new mode.
+  function setRestMode(mode: 'down' | 'up') {
+    if (restTimer.current) clearInterval(restTimer.current);
+    cancelRestNotification();
+    setRestEditing(false);
+    if (mode === 'up') {
+      restUpStart.current = Date.now();
+      setRest((r) => ({ ...r, mode: 'up', running: false, up: 0 }));
+    } else {
+      const sec = restFor(active.ei);
+      setRest((r) => ({ ...r, mode: 'down', running: false, remaining: sec, total: sec }));
+    }
+  }
+  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRestEditing(false); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
   // --- pause / resume (single-tap toggle in the header, L1) ------------------
   function pauseSession() {
@@ -487,7 +567,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
   function resumeSession() {
     setPaused(false);
-    if (restWasRunning.current) { restEndAt.current = Date.now() + rest.remaining * 1000; setRest((r) => ({ ...r, running: true })); runRestInterval(); }
+    if (restWasRunning.current) {
+      if (rest.mode === 'up') { restUpStart.current = Date.now() - rest.up * 1000; setRest((r) => ({ ...r, running: true })); runRestUpInterval(); }
+      else { restEndAt.current = Date.now() + rest.remaining * 1000; setRest((r) => ({ ...r, running: true })); runRestInterval(); showRestNotification(restEndAt.current); }
+    }
     if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
     saveSessionDraft(buildDraft(undefined, false));
   }
@@ -696,11 +779,32 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     : `SET ${workingNo(activeRows, active.si)} OF ${workingCount(activeRows)}`;
 
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
+  // Item 2: the rest timer is "live" (worth an always-visible strip) whenever a
+  // countdown is running OR the count-up stopwatch is running.
+  const restLive = rest.running && (rest.mode === 'down' ? rest.remaining > 0 : true);
+  const restStripText = rest.mode === 'up' ? mmss(rest.up) : mmss(rest.remaining);
 
   return (
     <>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4 }}>
+      {/* Item 2: always-visible rest strip. Fixed to the top so the remaining
+          rest time stays on screen while the keypad is open, while tapping other
+          sets, and while the page is scrolled. Tapping it opens the rest panel. */}
+      {restLive && (
+        <button
+          onClick={() => { setPanel('rest'); }}
+          aria-label={`Rest ${restStripText}. Open rest timer.`}
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 46, maxWidth: 460, margin: '0 auto', height: 'calc(38px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', border: 'none', cursor: 'pointer', background: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--accent)' : 'var(--accent-soft)', color: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--on-accent)' : 'var(--accent)', borderBottom: '1px solid var(--accent-line)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
+        >
+          <span className="msr-fill" style={{ fontSize: 17 }} aria-hidden="true">{rest.mode === 'up' ? 'timer' : 'hourglass_bottom'}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>{rest.mode === 'up' ? 'TIMING' : 'REST'}</span>
+          <span style={{ fontSize: 17, fontWeight: 800, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' }}>{restStripText}</span>
+          <span className="msr" style={{ fontSize: 18, opacity: 0.7 }} aria-hidden="true">expand_more</span>
+        </button>
+      )}
+
+      {/* Header (offset down while the fixed rest strip is showing so its
+          buttons are never covered at scroll-top). */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4, marginTop: restLive ? 40 : 0 }}>
         <button className="icon-btn" onClick={() => setExitOpen(true)} aria-label="Back out of session"><span className="msr" aria-hidden="true">chevron_left</span></button>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
@@ -765,7 +869,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                         <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
                           {style === 'duration'
-                            ? `${ex.targetSets ?? '·'} × ${ex.durationSeconds != null ? `${ex.durationSeconds}s` : 'timed'} target`
+                            ? `${ex.targetSets ?? '·'} × ${ex.durationSeconds != null ? mmss(ex.durationSeconds) : 'timed'} target`
                             : `${ex.targetSets ?? '·'} × ${ex.targetReps ?? '·'} target`}
                         </div>
                       </div>
@@ -838,7 +942,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       </div>
                       {showKg && <Cell active={rowActive && active.field === 'kg'} filled={st.kg !== ''} onClick={() => tap(index, si, 'kg')} value={st.kg} />}
                       {style === 'duration' ? (
-                        <Cell active={rowActive && active.field === 'dur'} filled={st.dur !== ''} onClick={() => tap(index, si, 'dur')} value={st.dur !== '' ? `${st.dur}s` : ''} />
+                        <Cell active={rowActive && active.field === 'dur'} filled={st.dur !== ''} onClick={() => tap(index, si, 'dur')} value={st.dur !== '' ? mmss(Number(st.dur) || 0) : ''} />
                       ) : (
                         <Cell active={rowActive && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
                       )}
@@ -977,20 +1081,59 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
               </>
             ) : panel === 'rest' ? (
               <div style={{ padding: '2px 2px 4px' }}>
+                {/* Item 4: countdown vs open-ended count-up. */}
+                <div className="seg" style={{ marginBottom: 12 }}>
+                  <button className={`seg-item ${rest.mode === 'down' ? 'active' : ''}`} onClick={() => setRestMode('down')}><span className="msr">hourglass_bottom</span>Countdown</button>
+                  <button className={`seg-item ${rest.mode === 'up' ? 'active' : ''}`} onClick={() => setRestMode('up')}><span className="msr">timer</span>Count-up</button>
+                </div>
+
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>REST</div>
-                  <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, color: rest.remaining <= 3 && rest.running ? 'var(--accent)' : 'var(--text)' }}>{mmss(rest.remaining)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{rest.mode === 'up' ? 'COUNT-UP' : 'REST'}</div>
+                  {rest.mode === 'down' && restEditing ? (
+                    <RestTimeInput
+                      initialSeconds={rest.remaining}
+                      onCommit={(sec) => { setRestSeconds(sec); setRestEditing(false); }}
+                      onCancel={() => setRestEditing(false)}
+                    />
+                  ) : (
+                    // Item 3: tap the time to type an exact rest duration.
+                    <button
+                      onClick={() => { if (rest.mode === 'down') setRestEditing(true); }}
+                      aria-label={rest.mode === 'down' ? 'Edit rest time' : undefined}
+                      style={{ background: 'transparent', border: 'none', padding: 0, cursor: rest.mode === 'down' ? 'text' : 'default', fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, fontVariantNumeric: 'tabular-nums', color: rest.mode === 'down' && rest.remaining <= 3 && rest.running ? 'var(--accent)' : 'var(--text)' }}
+                    >{rest.mode === 'up' ? mmss(rest.up) : mmss(rest.remaining)}</button>
+                  )}
                 </div>
-                <div style={{ height: 6, borderRadius: 4, background: 'var(--seg-track)', margin: '14px 0 16px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${restPct}%`, background: 'var(--accent)', borderRadius: 4, transition: 'width 0.9s linear' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => restAdjust(-15)} style={restSmBtn}>−15s</button>
-                  <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Skip rest</button>
-                  <button onClick={() => restAdjust(15)} style={restSmBtn}>+15s</button>
-                </div>
+
+                {rest.mode === 'down' && (
+                  <div style={{ height: 6, borderRadius: 4, background: 'var(--seg-track)', margin: '14px 0 16px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${restPct}%`, background: 'var(--accent)', borderRadius: 4, transition: 'width 0.9s linear' }} />
+                  </div>
+                )}
+
+                {rest.mode === 'down' ? (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, marginTop: rest.mode === 'down' ? 0 : 14 }}>
+                      <button onClick={() => restAdjust(-15)} style={restSmBtn}>-15s</button>
+                      <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Skip rest</button>
+                      <button onClick={() => restAdjust(15)} style={restSmBtn}>+15s</button>
+                    </div>
+                    {/* Quick presets — thumb-friendly typing shortcut (item 3). */}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      {[60, 90, 120, 180].map((s) => (
+                        <button key={s} onClick={() => setRestSeconds(s)} style={{ ...restSmBtn, height: 38, fontSize: 12.5, background: rest.remaining === s ? 'var(--accent-soft)' : 'var(--surface)', color: rest.remaining === s ? 'var(--accent)' : 'var(--text)', border: rest.remaining === s ? '1px solid var(--accent-line)' : '1px solid var(--border)' }}>{mmss(s)}</button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                    <button onClick={() => { restUpStart.current = Date.now(); setRest((r) => ({ ...r, up: 0, running: r.running })); }} style={restSmBtn}>Reset</button>
+                    <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Done</button>
+                  </div>
+                )}
+
                 <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={restToggle}>
-                  <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : 'Start rest'}
+                  <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : rest.mode === 'up' ? 'Start count-up' : 'Start rest'}
                 </button>
               </div>
             ) : (
@@ -1044,6 +1187,39 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
 const restSmBtn: React.CSSProperties = { flex: 1, height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--surface)', color: 'var(--text)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
 const pillStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 9px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', background: 'var(--surface)', border: '1px solid var(--border)' };
+
+// Item 3: type an exact rest duration. Accepts "M:SS" or plain seconds; the
+// native numeric keyboard shows because inputMode is numeric.
+function parseClockInput(raw: string): number | null {
+  const s = raw.trim();
+  if (s === '') return null;
+  if (s.includes(':')) {
+    const [m, sec] = s.split(':');
+    const mm = Number(m || 0), ss = Number(sec || 0);
+    if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null;
+    return Math.max(0, Math.round(mm * 60 + ss));
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+}
+function RestTimeInput({ initialSeconds, onCommit, onCancel }: { initialSeconds: number; onCommit: (sec: number) => void; onCancel: () => void }) {
+  const [val, setVal] = useState(fmtClock(initialSeconds));
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { const el = ref.current; if (el) { el.focus(); try { el.select(); } catch { /* ignore */ } } }, []);
+  const commit = () => { const sec = parseClockInput(val); if (sec == null) onCancel(); else onCommit(sec); };
+  return (
+    <input
+      ref={ref}
+      inputMode="numeric"
+      value={val}
+      onChange={(e) => setVal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onCancel(); }}
+      aria-label="Rest time (minutes:seconds or seconds)"
+      style={{ width: 150, textAlign: 'right', background: 'transparent', border: 'none', borderBottom: '2px solid var(--accent)', color: 'var(--text)', fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, fontVariantNumeric: 'tabular-nums', padding: 0 }}
+    />
+  );
+}
 
 function Cell({ active, filled, value, onClick }: { active: boolean; filled: boolean; value: string; onClick: () => void }) {
   const base: React.CSSProperties = { height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 11, fontSize: 16, fontWeight: 600, cursor: 'pointer' };
