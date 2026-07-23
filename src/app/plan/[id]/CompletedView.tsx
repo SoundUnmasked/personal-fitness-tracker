@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { shortDate, isoDate, fmtClock, fmtClockFromMinutes } from '@/lib/format';
 import StructuredBlock from '@/components/StructuredBlock';
 import SessionActions from '@/components/SessionActions';
+import NoteText from '@/components/NoteText';
 
 export interface CompletedSet {
   exerciseName: string;
@@ -79,7 +80,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
           {session.location && <div className="sub">{session.location}</div>}
         </div>
         <div className="h1-lg" style={{ marginTop: 12 }}>{session.title || `${session.type} session`}</div>
-        {session.notes && <div style={{ fontSize: 13.5, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6, whiteSpace: 'pre-wrap' }}>{session.notes}</div>}
+        {session.notes && <div style={{ fontSize: 13.5, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}><NoteText text={session.notes} max={160} /></div>}
       </div>
 
       {/* Totals */}
@@ -166,7 +167,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
                 {session.exerciseNotes?.[g.name] && (
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 10 }}>
                     <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }} aria-hidden="true">sticky_note_2</span>
-                    <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{session.exerciseNotes[g.name]}</div>
+                    <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-dim)' }}><NoteText text={session.exerciseNotes[g.name]} max={120} /></div>
                   </div>
                 )}
                 {/* legacy per-set notes (kept for imported history) */}
