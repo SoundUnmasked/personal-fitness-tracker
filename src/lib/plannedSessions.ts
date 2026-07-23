@@ -148,6 +148,50 @@ export async function createPlannedSession(
   });
 }
 
+/**
+ * Package Q: overwrite a PLANNED session's contents (movements + targets +
+ * warm-up + cool-down + title/type/notes) in one transaction. The date is left
+ * unchanged (rescheduling is a separate action). Planned exercises are replaced
+ * wholesale, which also applies add / remove / reorder — the input order IS the
+ * new order. Never touches a completed session's logged actuals.
+ */
+export async function updatePlannedSession(
+  prisma: PrismaClient,
+  id: number,
+  input: PlannedSessionInput,
+) {
+  return prisma.$transaction(async (tx) => {
+    await tx.plannedExercise.deleteMany({ where: { sessionId: id } });
+    return tx.session.update({
+      where: { id },
+      data: {
+        type: input.type,
+        title: input.title ?? null,
+        location: input.location ?? DEFAULT_LOCATION,
+        notes: input.notes ?? null,
+        warmup: serializeFlowItems(input.warmup),
+        cooldown: serializeFlowItems(input.cooldown),
+        plannedExercises: {
+          create: input.exercises.map((e, i) => ({
+            order: i,
+            exerciseName: e.name,
+            targetSets: e.sets ?? null,
+            targetReps: e.reps ?? null,
+            targetWeightKg: e.weightKg ?? null,
+            restSeconds: e.restSeconds ?? null,
+            setStyle: e.setStyle ?? null,
+            durationSeconds: e.durationSeconds ?? null,
+            tempo: e.tempo ?? null,
+            supersetGroup: e.superset ?? null,
+            notes: e.notes ?? null,
+          })),
+        },
+      },
+      include: { plannedExercises: { orderBy: { order: 'asc' } } },
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Reschedule / duplicate / delete — shared by the in-app server actions AND the
 // external x-api-key endpoints so both behave identically.
