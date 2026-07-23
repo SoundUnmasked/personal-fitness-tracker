@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
-import { previousWeights, previousWarmups } from '@/lib/plannedSessions';
+import { previousWeights, previousWarmups, reconstructCompletedRows } from '@/lib/plannedSessions';
 import { hasRunComponent, needsCooldownPrompt } from '@/lib/rules';
 import { readFlow } from '@/lib/flowItems';
 import LogGrid, { type LogPlan } from './LogGrid';
@@ -14,7 +14,12 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    include: { plannedExercises: { orderBy: { order: 'asc' } } },
+    include: {
+      plannedExercises: { orderBy: { order: 'asc' } },
+      // Package R fix 1: for a completed session we hydrate the logger from the
+      // DATABASE (there is no local draft — it was cleared on Finish).
+      strengthSets: { orderBy: { id: 'asc' } },
+    },
   });
   if (!session) notFound();
 
@@ -26,6 +31,21 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
 
   const warm = readFlow(session.warmup);
   const cool = readFlow(session.cooldown);
+
+  // Package R fix 1: reconstruct the recorded actuals, aligned to the planned
+  // exercises by name, so "Edit logged sets" opens on exactly what was saved
+  // (pre-ticked) rather than a blank plan.
+  let completed: LogPlan['completed'] = null;
+  if (session.status === 'completed') {
+    completed = {
+      durationMin: session.durationMin,
+      rpeOverall: session.rpeOverall,
+      energyPre: session.energyPre,
+      sessionNote: session.notes ?? '',
+      totalSets: session.strengthSets.length,
+      exercises: reconstructCompletedRows(session.plannedExercises, session.strengthSets),
+    };
+  }
 
   const plan: LogPlan = {
     id: session.id,
@@ -56,6 +76,7 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
         prevWarmups: prevWarm[e.exerciseName] ?? [],
       };
     }),
+    completed,
   };
 
   return <LogGrid plan={plan} />;

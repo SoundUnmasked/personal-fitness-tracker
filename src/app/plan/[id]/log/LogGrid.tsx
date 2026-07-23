@@ -7,6 +7,7 @@ import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
 import { fmtClock } from '@/lib/format';
 import { parseTempoRegions } from '@/lib/tempo';
+import NoteText from '@/components/NoteText';
 import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
@@ -151,6 +152,17 @@ export interface LogExercise {
   loggedNote: string | null; // Package O: note logged last time this plan was completed
   prevWarmups: { weightKg: number | null; reps: number | null }[]; // Package O: warm-up memory
 }
+// Package R fix 1: recorded actuals for a COMPLETED session, aligned to
+// `exercises` by index, so re-opening the logger hydrates from the DB.
+export interface CompletedRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; warmup: boolean; }
+export interface CompletedActuals {
+  durationMin: number | null;
+  rpeOverall: number | null;
+  energyPre: number | null;
+  sessionNote: string;
+  totalSets: number;        // existing recorded strength_sets count (fix 2 guard)
+  exercises: CompletedRow[][];
+}
 export interface LogPlan {
   id: number;
   type: string;
@@ -162,6 +174,7 @@ export interface LogPlan {
   cooldown: FlowItem[];      // structured cool-down items
   cooldownText: string | null;
   exercises: LogExercise[];
+  completed?: CompletedActuals | null; // present only when editing a completed session
 }
 
 interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; suggested?: boolean; }
@@ -186,6 +199,23 @@ function initSets(ex: LogExercise): SetRow[] {
   return [...suggestedWarmups, ...working];
 }
 const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup });
+// Package R fix 1: build the grid from a completed session's saved actuals,
+// aligned by exercise index, with every saved set pre-TICKED so the editor
+// opens on exactly what was recorded. Exercises with no saved rows fall back to
+// their plan rows (unticked) so they can still be logged during the edit.
+function completedToSets(plan: LogPlan): SetRow[][] {
+  const c = plan.completed;
+  if (!c) return plan.exercises.map(initSets);
+  return plan.exercises.map((ex, ei) => {
+    const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
+    const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
+    const rows = (c.exercises[ei] ?? []).map((r) => ({
+      kg: r.kg, reps: r.reps, dur: r.dur, rpe: r.rpe, rpeHi: r.rpeHi,
+      done: true, prevKg, prevReps, warmup: r.warmup, suggested: false,
+    }));
+    return rows.length ? rows : initSets(ex);
+  });
+}
 /** RPE cell text: half-points as typed; ranges as "7-8" (fix 4). */
 const rpeDisplay = (st: Pick<SetRow, 'rpe' | 'rpeHi'>): string =>
   st.rpe === '' ? '' : st.rpeHi ? `${st.rpe}-${st.rpeHi}` : st.rpe;
@@ -214,7 +244,10 @@ const fieldsForStyle = (style: 'reps' | 'duration', showKg: boolean): Field[] =>
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
 
-  const [sets, setSets] = useState<SetRow[][]>(() => plan.exercises.map(initSets));
+  // Fix 1: a completed session opens on its saved actuals (pre-ticked); a
+  // planned session opens on plan targets. A local draft (in-progress) still
+  // overrides both, hydrated in the effect below.
+  const [sets, setSets] = useState<SetRow[][]>(() => plan.completed ? completedToSets(plan) : plan.exercises.map(initSets));
   const [active, setActive] = useState<{ ei: number; si: number; field: Field }>({ ei: 0, si: 0, field: 'kg' });
   // Item 3: no keypad on open — the panel starts hidden and only reveals the
   // keypad once the user taps a cell (tap() sets it to 'entry').
@@ -231,7 +264,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // the plan note) and a session-level note. Editable mid-session via the note
   // sheet; persisted in the draft and sent on Finish.
   const [exNotes, setExNotes] = useState<string[]>(() => plan.exercises.map((e) => e.loggedNote ?? e.planNote ?? ''));
-  const [sessionNote, setSessionNote] = useState('');
+  const [sessionNote, setSessionNote] = useState(plan.completed?.sessionNote ?? '');
   const [noteTarget, setNoteTarget] = useState<number | 'session' | null>(null); // open note editor
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
@@ -239,7 +272,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // open-ended count-up stopwatch for unstructured work. `up` holds the count.
   const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s, mode: 'down' as 'down' | 'up', up: 0 }; });
   const [restEditing, setRestEditing] = useState(false); // typing an exact rest (item 3)
-  const [elapsed, setElapsed] = useState(0);
+  // Editing a completed session starts the clock at its recorded duration so a
+  // re-save preserves it (fix 1).
+  const [elapsed, setElapsed] = useState(plan.completed?.durationMin != null ? plan.completed.durationMin * 60 : 0);
   const [finishing, setFinishing] = useState(false);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const restWasRunning = useRef(false);
@@ -966,12 +1001,18 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     </div>
                   </div>
 
-                  {/* Package O: inline preview of this exercise's note. */}
+                  {/* Package O + R: inline note preview, truncated with an
+                      in-place "See full note" (fix 3); the pencil opens the editor. */}
                   {exNotes[index]?.trim() && (
-                    <button onClick={() => setNoteTarget(index)} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9 }}>
                       <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }} aria-hidden="true">sticky_note_2</span>
-                      <span style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>{exNotes[index]}</span>
-                    </button>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                        <NoteText text={exNotes[index]} max={110} />
+                      </div>
+                      <button onClick={() => setNoteTarget(index)} aria-label={`Edit note for ${ex.name}`} style={{ flex: 'none', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 0 }}>
+                        <span className="msr" style={{ fontSize: 15 }} aria-hidden="true">edit</span>
+                      </button>
+                    </div>
                   )}
 
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -1811,8 +1852,9 @@ function FinishSheet({ plan, sets, warmup, cooldown, exNotes, sessionNote, doneC
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [rpeOverall, setRpe] = useState('');
-  const [energyPre, setEnergy] = useState('');
+  // Editing a completed session pre-fills its recorded RPE / energy (fix 1).
+  const [rpeOverall, setRpe] = useState(plan.completed?.rpeOverall != null ? String(plan.completed.rpeOverall) : '');
+  const [energyPre, setEnergy] = useState(plan.completed?.energyPre != null ? String(plan.completed.energyPre) : '');
   // Session note flows through here (also editable mid-session); seed from it.
   const [notes, setNotes] = useState(sessionNote);
   const [cooldownDone, setCooldown] = useState(false);
@@ -1822,14 +1864,27 @@ function FinishSheet({ plan, sets, warmup, cooldown, exNotes, sessionNote, doneC
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  // Fix 2: pending destructive re-save awaiting explicit confirmation.
+  const [confirmRemoval, setConfirmRemoval] = useState<{ existing: number; next: number } | null>(null);
 
   const showCooldownPrompt = plan.needsCooldown && cooldown.length === 0 && !plan.cooldownText;
 
-  async function save() {
-    setSaving(true); setError(null);
+  async function save(confirmed = false) {
     // Data truth: ONLY ticked sets are saved. Rows pre-fill from targets, so a
     // value alone proves nothing — unticked rows are dropped (no ghost rows).
     const strengthSets = tickedStrengthSets(plan.exercises, sets);
+
+    // Fix 2: never silently destroy recorded history. If this is a re-save of a
+    // completed session and it would remove any existing recorded set (fewer
+    // sets than are on record, incl. dropping to zero), require an explicit
+    // confirmation that states plainly what will be removed.
+    const existing = plan.completed?.totalSets ?? 0;
+    if (!confirmed && existing > 0 && strengthSets.length < existing) {
+      setConfirmRemoval({ existing, next: strengthSets.length });
+      return;
+    }
+    setConfirmRemoval(null);
+    setSaving(true); setError(null);
     const run = plan.hasRun ? {
       distanceKm: distanceKm ? Number(distanceKm) : null,
       avgHr: avgHr ? Number(avgHr) : null,
@@ -1937,9 +1992,30 @@ function FinishSheet({ plan, sets, warmup, cooldown, exNotes, sessionNote, doneC
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="How did it feel?" />
         </div>
 
-        <button className="btn btn-lg" onClick={save} disabled={saving}>
-          {saving ? <span className="spin" /> : <>Save &amp; complete<span className="msr-fill" style={{ fontSize: 20 }}>check</span></>}
-        </button>
+        {/* Fix 2: destructive re-save confirmation. Stated plainly, blocks the
+            save until the user explicitly confirms removing recorded history. */}
+        {confirmRemoval ? (
+          <div className="note note-err" style={{ display: 'block', marginBottom: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <span className="msr-fill" aria-hidden="true">warning</span>
+              <div style={{ fontSize: 13, lineHeight: 1.4 }}>
+                {confirmRemoval.next === 0
+                  ? `This will delete all ${confirmRemoval.existing} recorded set${confirmRemoval.existing === 1 ? '' : 's'} for this session. Nothing is ticked, so nothing will be saved in their place.`
+                  : `This will replace the ${confirmRemoval.existing} recorded set${confirmRemoval.existing === 1 ? '' : 's'} with ${confirmRemoval.next}, removing ${confirmRemoval.existing - confirmRemoval.next}. Recorded history can't be recovered.`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn-sm" onClick={() => setConfirmRemoval(null)} style={{ flex: 1, height: 46, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}>Cancel</button>
+              <button className="btn-sm" onClick={() => save(true)} disabled={saving} style={{ flex: 1.3, height: 46, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)', fontWeight: 700 }}>
+                {saving ? <span className="spin" /> : (confirmRemoval.next === 0 ? 'Delete recorded sets' : 'Remove & save')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn btn-lg" onClick={() => save()} disabled={saving}>
+            {saving ? <span className="spin" /> : <>Save &amp; complete<span className="msr-fill" style={{ fontSize: 20 }}>check</span></>}
+          </button>
+        )}
       </div>
     </div>
   );

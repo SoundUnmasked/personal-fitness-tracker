@@ -545,6 +545,50 @@ export function tickedStrengthSets(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Package R fix 1: reconstruct a completed session's saved sets into per-planned-
+// exercise rows (aligned by exercise order) so the logger can hydrate from the
+// DATABASE. Pure — the caller (log page) maps these to pre-ticked grid rows.
+// ---------------------------------------------------------------------------
+export interface CompletedActualRow {
+  kg: string; reps: string; dur: string; rpe: string; rpeHi: string; warmup: boolean;
+}
+export interface SavedSetLike {
+  exerciseName: string;
+  reps: number | null;
+  weightKg: number | null;
+  durationSeconds: number | null;
+  rpe: number | null;
+  rpeHigh: number | null;
+  isWarmup: boolean;
+}
+export function reconstructCompletedRows(
+  plannedExercises: { exerciseName: string }[],
+  strengthSets: SavedSetLike[],
+): CompletedActualRow[][] {
+  const byName = new Map<string, SavedSetLike[]>();
+  for (const s of strengthSets) {
+    const arr = byName.get(s.exerciseName) ?? [];
+    arr.push(s);
+    byName.set(s.exerciseName, arr);
+  }
+  const consumed = new Set<string>();
+  return plannedExercises.map((e) => {
+    // The first planned exercise of a given name claims that name's saved rows
+    // (duplicate names in one plan are rare; a later duplicate gets none).
+    const rows = !consumed.has(e.exerciseName) ? (byName.get(e.exerciseName) ?? []) : [];
+    consumed.add(e.exerciseName);
+    return rows.map((s) => ({
+      kg: s.weightKg != null ? String(s.weightKg) : '',
+      reps: s.reps != null ? String(s.reps) : '',
+      dur: s.durationSeconds != null ? String(s.durationSeconds) : '',
+      rpe: s.rpe != null ? String(s.rpe) : '',
+      rpeHi: s.rpeHigh != null ? String(s.rpeHigh) : '',
+      warmup: s.isWarmup,
+    }));
+  });
+}
+
 /** Run actuals resolved by the caller (HR provenance already picked). */
 export interface CompletedRunData {
   distanceKm: number | null;

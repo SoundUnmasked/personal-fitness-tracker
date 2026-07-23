@@ -6,6 +6,39 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package R — fix "Edit logged sets" + notes truncation
+
+- **Fix 1 (critical): the logger hydrates from the DB for a completed session.**
+  "Edit logged sets" was opening a blank logger because the logger only ever
+  hydrated from the local draft, which is cleared on Finish. Now the log page
+  loads the saved `strengthSets` when `status === 'completed'` and builds a
+  `completed` payload (`reconstructCompletedRows`, pure + tested) aligned to the
+  planned exercises; the grid opens with those sets **pre-ticked**, the recorded
+  RPE / energy / duration / session + per-exercise notes pre-filled, so the user
+  edits from exactly what was recorded. The local-draft path is unchanged for
+  in-progress sessions and still takes precedence (a backed-out edit resumes
+  from its draft).
+- **Fix 2 (critical safety): re-saving can't silently destroy history.** The
+  Finish sheet now compares the new ticked-set count against the session's
+  existing recorded count; if a re-save of a completed session would remove any
+  recorded set (fewer than on record, including dropping to zero) it blocks and
+  requires an explicit confirmation that states plainly what will be removed
+  ("This will delete all N recorded sets…" / "…removing M"). Cancel leaves the
+  DB untouched. Belt-and-braces on top of fix 1 (which makes accidental wipes
+  far less likely by loading sets pre-ticked).
+- **Fix 3: long notes truncate with an in-place expander.** New shared
+  `components/NoteText` shows a word-boundary-truncated portion with a
+  "See full note" / "Show less" toggle. Applied to per-exercise and session
+  notes in the logger, the completed view, and the planned preview.
+- Tests: `tests/package-r.test.ts` — `reconstructCompletedRows` alignment +
+  values (incl. warm-up flags and RPE ranges), a DB round-trip proving a
+  completed session rebuilds to exactly what was saved, and the destructive-
+  re-save guard predicate plus a DB proof that a confirmed shrink really
+  reduces the rows.
+- No schema change in this package.
+
+---
+
 # Package Q — session editing
 
 - **Edit a planned session's contents (item 1).** New `/plan/[id]/edit` route

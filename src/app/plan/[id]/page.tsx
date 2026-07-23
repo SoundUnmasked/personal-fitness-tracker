@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
 import { shortDate, isoDate, fmtClock } from '@/lib/format';
+import NoteText from '@/components/NoteText';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
 import SessionActions from '@/components/SessionActions';
@@ -168,7 +169,7 @@ export default async function PlannedSessionPreview({
           <div className="sub">{session.location}</div>
         </div>
         <div className="h1-lg" style={{ marginTop: 12 }}>{session.title || `${session.type} session`}</div>
-        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}>{session.notes}</div>}
+        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}><NoteText text={session.notes} max={160} /></div>}
       </div>
 
       {/* Totals */}
@@ -231,7 +232,7 @@ export default async function PlannedSessionPreview({
                         {ex.note && (
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9 }}>
                             <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }}>push_pin</span>
-                            <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>{ex.note}</div>
+                            <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}><NoteText text={ex.note} max={120} /></div>
                           </div>
                         )}
                       </div>
