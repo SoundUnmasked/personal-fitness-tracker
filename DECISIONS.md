@@ -6,6 +6,35 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package P — tempo block
+
+- **Region-based engine (item 1).** New pure `lib/tempo.ts` parses a notation
+  (3030, 3110, 31X1, 3-digit 303) into its four explicit regions — eccentric
+  (Lower), isometric bottom (Pause), concentric (Lift), rest/hold at top (Hold)
+  — dropping zero-length regions. The player drives a DISTINCT audible cue per
+  region (its own pitch: lower for the descent, higher for the lift), plus a
+  soft interior sub-tick each whole second, replacing the old flat one-tick-a-
+  second metronome. An "X" concentric is an explosive accent. This deliberately
+  supersedes the earlier "one identical tick every second" tempo behaviour.
+- **Setup delay (item 2).** Pressing Start runs a configurable delay
+  (presets 5/10/15s, default 10, or Off) with a visible "GET SET UP" countdown
+  and soft ticks, then a clear rising "starting now" cue (523->784, distinct
+  from the rest-end chime) as the tempo begins — so the first rep isn't already
+  counting while you unrack.
+- **Its own block, superset-aware (item 3).** Tempo is a coherent panel (not
+  embedded in the grid) that auto-loads the active exercise's prescribed tempo.
+  Inside a superset it shows tabs for the sibling movements that carry a tempo;
+  tapping one makes it active and auto-loads its notation, so alternating A/B
+  works cleanly.
+- **No rep-number callout (item 4).** Deliberately not added (deferred).
+- **Background note:** tempo runs on requestAnimationFrame, which the browser
+  suspends when backgrounded — acceptable, since tempo reps are a foreground,
+  screen-on activity (the wake lock keeps the screen alive).
+- Tests: `tests/tempo.test.ts` covers the region parsing (3030/3110/31X1/303,
+  junk, cycle length).
+
+---
+
 # Package O — per-exercise notes and warm-up memory
 
 - **Per-exercise notes (item 1).** New additive column
