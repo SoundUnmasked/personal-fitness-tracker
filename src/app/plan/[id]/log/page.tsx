@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
-import { previousWeights } from '@/lib/plannedSessions';
+import { previousWeights, previousWarmups } from '@/lib/plannedSessions';
 import { hasRunComponent, needsCooldownPrompt } from '@/lib/rules';
 import { readFlow } from '@/lib/flowItems';
 import LogGrid, { type LogPlan } from './LogGrid';
@@ -18,11 +18,11 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
   });
   if (!session) notFound();
 
-  const prev = await previousWeights(
-    prisma,
-    session.plannedExercises.map((e) => e.exerciseName),
-    session.date,
-  );
+  const names = session.plannedExercises.map((e) => e.exerciseName);
+  const [prev, prevWarm] = await Promise.all([
+    previousWeights(prisma, names, session.date),
+    previousWarmups(prisma, names, session.date),
+  ]);
 
   const warm = readFlow(session.warmup);
   const cool = readFlow(session.cooldown);
@@ -51,6 +51,9 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
         superset: e.supersetGroup,
         prevKg: p?.weightKg ?? null,
         prevReps: p?.reps ?? null,
+        planNote: e.notes ?? null,
+        loggedNote: e.loggedNote ?? null,
+        prevWarmups: prevWarm[e.exerciseName] ?? [],
       };
     }),
   };

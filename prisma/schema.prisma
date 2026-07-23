@@ -105,7 +105,11 @@ model PlannedExercise {
   // pause). When present the logger offers a tempo metronome.
   tempo          String?
   supersetGroup  String? @map("superset_group") // e.g. "A", "B" — shared = superset
-  notes          String?
+  notes          String? // the PLAN note (coach cue), shown on the preview
+  // Package O: the note written DURING logging for this movement ("felt heavy",
+  // "form broke on set 3"). Kept separate from the plan note; shown on the
+  // completed view. Additive column — apply to Turso via turso-push.
+  loggedNote     String? @map("logged_note")
 
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 

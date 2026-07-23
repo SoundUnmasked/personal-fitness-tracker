@@ -6,6 +6,33 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package O — per-exercise notes and warm-up memory
+
+- **Per-exercise notes (item 1).** New additive column
+  `planned_exercises.logged_note` (registered in turso-push ADDITIVE_COLUMNS;
+  NOT applied to Turso here). Kept separate from the existing plan note
+  (`notes`, the coach cue shown on the preview). Written during logging via a
+  one-tap note button on each exercise card (and an inline preview of the
+  note); shown once per exercise on the completed view. Pre-filled from last
+  time's logged note, falling back to the plan note. Persisted per
+  planned-exercise `order` in `saveCompletedActuals` (empty clears to null).
+- **Session-level notes (item 2).** Already persisted via the Finish sheet
+  (`Session.notes`); Package O also makes it reachable mid-session through a
+  "Session note" button, sharing the same note-sheet editor and the draft. The
+  Finish sheet seeds its notes field from it.
+- **Warm-up memory (item 3).** New `previousWarmups()` reader (no column —
+  reads existing `is_warmup` sets). When an exercise had warm-up sets in its
+  most recent completed session, the logger pre-populates the SAME NUMBER of
+  warm-up rows with those weights/reps, flagged `suggested`. Rules honoured:
+  mirrors the most recent prior session only (never a fixed default), never
+  applied to an exercise with no history, always editable and removable (a
+  "Warm-up suggested from last time" banner with Dismiss; a dashed, dimmed row
+  style until ticked/edited, at which point it commits and reads as normal).
+- **No Turso migration run.** `logged_note` is additive and registered for the
+  owner to apply via `npm run db:push:turso`.
+
+---
+
 # Package N — timer system rework
 
 - **Ongoing rest notification (item 1).** While a countdown runs we show ONE

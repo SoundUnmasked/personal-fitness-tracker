@@ -116,6 +116,9 @@ export interface LogExercise {
   superset: string | null;
   prevKg: number | null;
   prevReps: number | null;
+  planNote: string | null;   // Package O: the plan note (coach cue)
+  loggedNote: string | null; // Package O: note logged last time this plan was completed
+  prevWarmups: { weightKg: number | null; reps: number | null }[]; // Package O: warm-up memory
 }
 export interface LogPlan {
   id: number;
@@ -130,7 +133,7 @@ export interface LogPlan {
   exercises: LogExercise[];
 }
 
-interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; }
+interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; suggested?: boolean; }
 type Field = 'kg' | 'reps' | 'rpe' | 'dur';
 
 function initSets(ex: LogExercise): SetRow[] {
@@ -140,7 +143,16 @@ function initSets(ex: LogExercise): SetRow[] {
   const dur = ex.setStyle === 'duration' && ex.durationSeconds != null ? String(ex.durationSeconds) : '';
   const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
   const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
-  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', rpeHi: '', done: false, prevKg, prevReps, warmup: false }));
+  const working: SetRow[] = Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', rpeHi: '', done: false, prevKg, prevReps, warmup: false }));
+  // Package O: warm-up memory — prepend the same NUMBER of warm-up sets this
+  // movement had last time, pre-filled with those weights/reps and flagged as a
+  // suggestion (never auto-applied to an exercise with no history).
+  const suggestedWarmups: SetRow[] = (ex.prevWarmups ?? []).map((w) => ({
+    kg: w.weightKg != null ? String(w.weightKg) : '',
+    reps: w.reps != null ? String(w.reps) : '',
+    dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup: true, suggested: true,
+  }));
+  return [...suggestedWarmups, ...working];
 }
 const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup });
 /** RPE cell text: half-points as typed; ranges as "7-8" (fix 4). */
@@ -184,6 +196,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const [warmup, setWarmup] = useState<FlowItem[]>(() => plan.warmup.map((i) => ({ ...i })));
   const [cooldown, setCooldown] = useState<FlowItem[]>(() => plan.cooldown.map((i) => ({ ...i })));
   const [notifyAsk, setNotifyAsk] = useState(false);
+  // Package O: per-exercise logged notes (pre-filled from last time's note, or
+  // the plan note) and a session-level note. Editable mid-session via the note
+  // sheet; persisted in the draft and sent on Finish.
+  const [exNotes, setExNotes] = useState<string[]>(() => plan.exercises.map((e) => e.loggedNote ?? e.planNote ?? ''));
+  const [sessionNote, setSessionNote] = useState('');
+  const [noteTarget, setNoteTarget] = useState<number | 'session' | null>(null); // open note editor
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
   // Rest timer has two modes (item 4): 'down' = countdown to restEndAt; 'up' =
@@ -234,6 +252,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const pausedRef = useRef(paused); useEffect(() => { pausedRef.current = paused; }, [paused]);
   const warmupRef = useRef(warmup); useEffect(() => { warmupRef.current = warmup; }, [warmup]);
   const cooldownRef = useRef(cooldown); useEffect(() => { cooldownRef.current = cooldown; }, [cooldown]);
+  const exNotesRef = useRef(exNotes); useEffect(() => { exNotesRef.current = exNotes; }, [exNotes]);
+  const sessionNoteRef = useRef(sessionNote); useEffect(() => { sessionNoteRef.current = sessionNote; }, [sessionNote]);
   const clearedRef = useRef(false); // set once the draft is intentionally cleared (finish)
   // Disposition for the NEXT nav-away save: null → default (implicitly pause),
   // false → keep running (item 3 "Keep session running"). Reset after each use.
@@ -250,6 +270,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     elapsed: elapsedRef.current,
     paused: overridePaused ?? pausedRef.current,
     updatedAt: Date.now(),
+    exNotes: exNotesRef.current,
+    sessionNote: sessionNoteRef.current,
   }), [plan.id, plan.title]);
 
   // Every set mutation saves the full draft synchronously.
@@ -286,6 +308,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       }
       if (Array.isArray(d.warmup)) setWarmup(d.warmup);
       if (Array.isArray(d.cooldown)) setCooldown(d.cooldown);
+      if (Array.isArray(d.exNotes)) setExNotes((prev) => prev.map((n, i) => d.exNotes?.[i] ?? n));
+      if (typeof d.sessionNote === 'string') setSessionNote(d.sessionNote);
       // Auto-resume (never open into a paused interstitial). Only flash the
       // "Resumed" confirmation when the draft had been implicitly paused
       // (backed-out / "save & come back") — item 4b.
@@ -581,7 +605,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     swTimer.current = setInterval(() => { swElapsed.current += 1; setSw({ running: true, elapsed: swElapsed.current }); }, 1000);
   }
   function writeField(ei: number, si: number, field: Field, value: string) {
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value } : row)));
+    // Editing a suggested warm-up commits it (no longer a mere suggestion).
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value, suggested: false } : row)));
   }
   function durToggle() {
     if (sw.running) {
@@ -618,7 +643,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       else if (v === '.') cur = cur.includes('.') ? cur : (cur === '' ? '0.' : cur + '.');
       else if (cur.replace('.', '').length < 4) cur = cur + v;
       // Editing the RPE value abandons any "7 or 8" range (fix 4).
-      const patch: Partial<SetRow> = { [active.field]: cur };
+      const patch: Partial<SetRow> = { [active.field]: cur, suggested: false };
       if (active.field === 'rpe') patch.rpeHi = '';
       return { ...row, ...patch };
     })));
@@ -640,7 +665,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // could skip the rest-timer auto-start (issue 8).
     const row = sets[ei]?.[si];
     const nowDone = !(row?.done ?? false);
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone } : r)));
+    // Ticking a suggested warm-up commits it.
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone, suggested: false } : r)));
     // Ticking a set auto-starts THIS exercise's rest timer — but NEVER resets
     // one that is already counting (fix 2), and warm-up rows don't start rest
     // at all (fix 7).
@@ -705,6 +731,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }, [buildDraft]);
   const patchCooldown = useCallback((i: number, patch: Partial<FlowItem>) => {
     setCooldown((prev) => { const next = prev.map((it, idx) => idx === i ? { ...it, ...patch } : it); cooldownRef.current = next; saveSessionDraft(buildDraft()); return next; });
+  }, [buildDraft]);
+  // Package O: note editing (per-exercise + session), persisted to the draft.
+  const setExNote = useCallback((ei: number, text: string) => {
+    setExNotes((prev) => { const next = prev.map((n, i) => i === ei ? text : n); exNotesRef.current = next; saveSessionDraft(buildDraft()); return next; });
+  }, [buildDraft]);
+  const setSessionNoteSaved = useCallback((text: string) => {
+    setSessionNote(text); sessionNoteRef.current = text; saveSessionDraft(buildDraft());
   }, [buildDraft]);
 
   function deleteSet(ei: number, si: number) {
@@ -874,13 +907,25 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                         </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length && sets[index].length > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
+                      {/* Package O: one-tap per-exercise note. Filled state gets the accent. */}
+                      <button onClick={() => setNoteTarget(index)} aria-label={exNotes[index]?.trim() ? `Edit note for ${ex.name}` : `Add note for ${ex.name}`} style={{ width: 28, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '1px solid var(--border)', background: exNotes[index]?.trim() ? 'var(--accent-soft)' : 'var(--surface)', color: exNotes[index]?.trim() ? 'var(--accent)' : 'var(--text-dim)' }}>
+                        <span className="msr-fill" style={{ fontSize: 15 }} aria-hidden="true">{exNotes[index]?.trim() ? 'sticky_note_2' : 'note_add'}</span>
+                      </button>
                       <button onClick={() => setEditEx(editing ? null : index)} aria-label={editing ? 'Done editing sets' : 'Edit sets'} style={{ height: 26, padding: '0 9px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid var(--border)', background: editing ? 'var(--accent-soft)' : 'var(--surface)', color: editing ? 'var(--accent)' : 'var(--text-dim)' }}>
                         {editing ? 'Done' : 'Edit'}
                       </button>
                     </div>
                   </div>
+
+                  {/* Package O: inline preview of this exercise's note. */}
+                  {exNotes[index]?.trim() && (
+                    <button onClick={() => setNoteTarget(index)} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9, width: '100%', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}>
+                      <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }} aria-hidden="true">sticky_note_2</span>
+                      <span style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>{exNotes[index]}</span>
+                    </button>
+                  )}
 
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
                     <span style={pillStyle}><span className="msr" style={{ fontSize: 13 }} aria-hidden="true">timer</span>Rest {mmss(ex.restSeconds ?? DEFAULT_REST_SECONDS)}</span>
@@ -905,6 +950,16 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '8px 2px' }}>No sets. Add one below.</div>
                   )}
 
+                  {/* Package O: warm-up memory banner — a suggestion, not a
+                      commitment. Dismiss removes the still-suggested rows. */}
+                  {sets[index].some((s) => s.suggested && !s.done) && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '4px 0 2px', padding: '6px 9px', borderRadius: 9, background: 'var(--last-bg)', border: '1px dashed var(--border)' }}>
+                      <span className="msr" style={{ fontSize: 14, color: 'var(--text-faint)' }} aria-hidden="true">history</span>
+                      <span style={{ flex: 1, fontSize: 10.5, color: 'var(--text-faint)' }}>Warm-up suggested from last time · edit, tick or dismiss</span>
+                      <button onClick={() => updateSets((all) => all.map((rows, e) => e === index ? rows.filter((r) => !(r.suggested && !r.done)) : rows))} aria-label="Dismiss suggested warm-up" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px' }}>Dismiss</button>
+                    </div>
+                  )}
+
                   {sets[index].map((st, si) => {
                     const rowActive = activeHere && active.si === si;
                     const wNo = workingNo(sets[index], si);
@@ -914,7 +969,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div key={si}
                       onTouchStart={(e) => rowTouchStart(e, index, si)}
                       onTouchEnd={rowTouchEnd}
-                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
+                      // Package O: a still-suggested warm-up (from last time) reads
+                      // as a suggestion — dashed outline, dimmed — until it's
+                      // ticked or edited, when it becomes a committed row.
+                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : st.suggested ? 'inset 0 0 0 1px var(--border)' : 'none', opacity: st.suggested && !st.done ? 0.72 : 1, transition: 'background 0.12s, opacity 0.12s', touchAction: 'pan-y' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {editing ? (
                           <button onClick={() => toggleRowWarmup(index, si)} aria-label={st.warmup ? `Make set ${wNo} a working set` : 'Mark as warm-up set'} aria-pressed={st.warmup} style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 11 : 16, fontWeight: 800, letterSpacing: st.warmup ? '0.03em' : undefined, cursor: 'pointer', border: st.warmup ? '1px solid var(--accent-line)' : '1px dashed var(--border)', background: st.warmup ? 'var(--accent-soft)' : 'transparent', color: st.warmup ? 'var(--accent)' : 'var(--text-dim)' }}>
@@ -990,6 +1048,19 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         {plan.cooldownText
           ? <FlowProse kind="cooldown" text={plan.cooldownText} />
           : cooldown.length > 0 && <WarmCoolList kind="cooldown" items={cooldown} onPatch={patchCooldown} />}
+
+        {/* Package O: session-level note, reachable mid-session (item 2). */}
+        <button
+          onClick={() => setNoteTarget('session')}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', marginTop: 12, padding: '12px 14px', borderRadius: 14, background: 'var(--last-bg)', border: '1px solid var(--border)', cursor: 'pointer', color: 'var(--text)' }}
+        >
+          <span className="msr-fill" style={{ fontSize: 18, color: 'var(--accent)' }} aria-hidden="true">edit_note</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700 }}>Session note</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sessionNote.trim() || 'Add a note for the whole session'}</div>
+          </div>
+          <span className="msr" style={{ fontSize: 18, color: 'var(--text-faint)' }} aria-hidden="true">chevron_right</span>
+        </button>
       </div>
 
       {/* Bottom entry panel */}
@@ -1155,12 +1226,25 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         />
       )}
 
+      {/* Package O: note editor (per-exercise or session). */}
+      {noteTarget !== null && (
+        <NoteSheet
+          title={noteTarget === 'session' ? 'Session note' : plan.exercises[noteTarget]?.name ?? 'Note'}
+          subtitle={noteTarget === 'session' ? 'Anything not specific to one movement' : 'e.g. felt heavy, form broke on set 3, cycled in'}
+          value={noteTarget === 'session' ? sessionNote : (exNotes[noteTarget] ?? '')}
+          onSave={(text) => { if (noteTarget === 'session') setSessionNoteSaved(text); else setExNote(noteTarget, text); setNoteTarget(null); }}
+          onClose={() => setNoteTarget(null)}
+        />
+      )}
+
       {finishing && (
         <FinishSheet
           plan={plan}
           sets={sets}
           warmup={warmup}
           cooldown={cooldown}
+          exNotes={exNotes}
+          sessionNote={sessionNote}
           doneCount={doneCount}
           totalCount={totalCount}
           elapsed={elapsed}
@@ -1187,6 +1271,38 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
 const restSmBtn: React.CSSProperties = { flex: 1, height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--surface)', color: 'var(--text)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
 const pillStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 9px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', background: 'var(--surface)', border: '1px solid var(--border)' };
+
+// Package O: lightweight note editor sheet (per-exercise or session).
+function NoteSheet({ title, subtitle, value, onSave, onClose }: {
+  title: string; subtitle: string; value: string; onSave: (text: string) => void; onClose: () => void;
+}) {
+  const [text, setText] = useState(value);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTop: '1px solid var(--border)', padding: '18px 18px calc(20px + env(safe-area-inset-bottom))' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="h2" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+            <div className="sub">{subtitle}</div>
+          </div>
+          <button className="icon-btn dim" onClick={onClose} aria-label="Close" style={{ width: 44, height: 44, flex: 'none' }}><span className="msr" aria-hidden="true">close</span></button>
+        </div>
+        <textarea
+          ref={ref}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type a note…"
+          style={{ width: '100%', minHeight: 110, marginTop: 10, padding: '12px 13px', borderRadius: 13, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 15, lineHeight: 1.4, resize: 'vertical' }}
+        />
+        <button className="btn" style={{ height: 50, marginTop: 12, borderRadius: 14 }} onClick={() => onSave(text)}>
+          Save note<span className="msr-fill" style={{ fontSize: 20 }} aria-hidden="true">check</span>
+        </button>
+      </div>
+    </div>
+  );
+}
 
 // Item 3: type an exact rest duration. Accepts "M:SS" or plain seconds; the
 // native numeric keyboard shows because inputMode is numeric.
@@ -1543,11 +1659,13 @@ function exerciseLabel(groups: Group[], gi: number, pos: number): string {
 const OFFLINE_FINISH_MSG =
   'No signal. Your session is saved on this phone. Tap Finish again when you’re back online.';
 
-function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elapsed, onMarkAllDone, onClose, onSaved }: {
+function FinishSheet({ plan, sets, warmup, cooldown, exNotes, sessionNote, doneCount, totalCount, elapsed, onMarkAllDone, onClose, onSaved }: {
   plan: LogPlan;
   sets: SetRow[][];
   warmup: FlowItem[];
   cooldown: FlowItem[];
+  exNotes: string[];      // Package O: per-exercise logged notes (by index)
+  sessionNote: string;    // Package O: session-level note
   doneCount: number;
   totalCount: number;
   elapsed: number; // session seconds — saved as the session's duration
@@ -1557,7 +1675,8 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
 }) {
   const [rpeOverall, setRpe] = useState('');
   const [energyPre, setEnergy] = useState('');
-  const [notes, setNotes] = useState('');
+  // Session note flows through here (also editable mid-session); seed from it.
+  const [notes, setNotes] = useState(sessionNote);
   const [cooldownDone, setCooldown] = useState(false);
   const [distanceKm, setDistance] = useState('');
   const [avgHr, setAvgHr] = useState('');
@@ -1580,13 +1699,16 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
     } : null;
     let res;
     try {
+      // Package O: per-exercise notes keyed by planned-exercise order (= index).
+      const exerciseNotes: Record<number, string | null> = {};
+      exNotes.forEach((n, i) => { exerciseNotes[i] = n?.trim() ? n.trim() : null; });
       res = await completePlanAction(plan.id, {
         // Session clock → stored duration (whole minutes, ≥1 once started).
         durationMin: elapsed > 0 ? Math.max(1, Math.round(elapsed / 60)) : null,
         rpeOverall: rpeOverall ? Number(rpeOverall) : null,
         energyPre: energyPre ? Number(energyPre) : null,
         ...(showCooldownPrompt ? { cooldownDone } : {}),
-        warmup, cooldown,
+        warmup, cooldown, exerciseNotes,
         notes: notes || null, strengthSets, run,
       });
     } catch {

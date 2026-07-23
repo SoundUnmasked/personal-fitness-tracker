@@ -39,6 +39,7 @@ export interface CompletedSession {
   notes: string | null;
   sets: CompletedSet[];
   runs: CompletedRun[];
+  exerciseNotes?: Record<string, string>; // per-exercise logged notes, by name
 }
 
 interface ExGroup { name: string; sets: CompletedSet[] }
@@ -161,7 +162,14 @@ export default function CompletedView({ session }: { session: CompletedSession }
                     </div>
                   ))}
                 </div>
-                {/* movement notes (prose detail preserved on the first set) */}
+                {/* Package O: one per-exercise logged note, shown once. */}
+                {session.exerciseNotes?.[g.name] && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 10 }}>
+                    <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }} aria-hidden="true">sticky_note_2</span>
+                    <div style={{ fontSize: 12, lineHeight: 1.4, color: 'var(--text-dim)', whiteSpace: 'pre-wrap' }}>{session.exerciseNotes[g.name]}</div>
+                  </div>
+                )}
+                {/* legacy per-set notes (kept for imported history) */}
                 {g.sets.map((s, si) => s.notes ? (
                   <div key={`n${si}`} style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', marginTop: si === 0 ? 10 : 4, whiteSpace: 'pre-wrap' }}>{s.notes}</div>
                 ) : null)}

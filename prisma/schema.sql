@@ -46,6 +46,7 @@ CREATE TABLE "planned_exercises" (
     "tempo" TEXT,
     "superset_group" TEXT,
     "notes" TEXT,
+    "logged_note" TEXT,
     CONSTRAINT "planned_exercises_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
