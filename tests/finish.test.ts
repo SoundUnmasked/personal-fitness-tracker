@@ -53,16 +53,16 @@ describe('tickedStrengthSets (pure payload builder)', () => {
     ];
     const out = tickedStrengthSets(exercises, sets);
     expect(out).toEqual([
-      { exerciseName: 'Back Squat', setNo: 0, reps: 5, weightKg: 60, durationSeconds: null, isWarmup: true, rpe: null },
-      { exerciseName: 'Back Squat', setNo: 1, reps: 6, weightKg: 100, durationSeconds: null, isWarmup: false, rpe: null },
-      { exerciseName: 'Back Squat', setNo: 2, reps: 5, weightKg: 102.5, durationSeconds: null, isWarmup: false, rpe: 9 },
+      { exerciseName: 'Back Squat', setNo: 0, reps: 5, weightKg: 60, durationSeconds: null, isWarmup: true, rpe: null, rpeHigh: null },
+      { exerciseName: 'Back Squat', setNo: 1, reps: 6, weightKg: 100, durationSeconds: null, isWarmup: false, rpe: null, rpeHigh: null },
+      { exerciseName: 'Back Squat', setNo: 2, reps: 5, weightKg: 102.5, durationSeconds: null, isWarmup: false, rpe: 9, rpeHigh: null },
     ]);
   });
 
-  it('saves a ticked set even when its fields are empty (bodyweight / no values entered)', () => {
+  it('saves a ticked timed set with a positive duration', () => {
     const out = tickedStrengthSets([{ name: 'Dead Hang' }], [[row({ done: true, dur: '30' })]]);
     expect(out).toEqual([
-      { exerciseName: 'Dead Hang', setNo: 1, reps: null, weightKg: null, durationSeconds: 30, isWarmup: false, rpe: null },
+      { exerciseName: 'Dead Hang', setNo: 1, reps: null, weightKg: null, durationSeconds: 30, isWarmup: false, rpe: null, rpeHigh: null },
     ]);
   });
 });

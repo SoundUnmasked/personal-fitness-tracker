@@ -19,7 +19,7 @@ CREATE TABLE "sessions" (
     "duration_min" INTEGER,
     "location" TEXT DEFAULT 'Third Space Wimbledon',
     "energy_pre" INTEGER,
-    "rpe_overall" INTEGER,
+    "rpe_overall" REAL,
     "cooldown_done" BOOLEAN NOT NULL DEFAULT false,
     "warmup_done" BOOLEAN NOT NULL DEFAULT false,
     "warmup" TEXT,
@@ -59,7 +59,8 @@ CREATE TABLE "strength_sets" (
     "weight_kg" REAL,
     "duration_seconds" INTEGER,
     "is_warmup" BOOLEAN NOT NULL DEFAULT false,
-    "rpe" INTEGER,
+    "rpe" REAL,
+    "rpe_high" REAL,
     "notes" TEXT,
     CONSTRAINT "strength_sets_session_id_fkey" FOREIGN KEY ("session_id") REFERENCES "sessions" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );

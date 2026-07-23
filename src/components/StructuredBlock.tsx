@@ -20,11 +20,15 @@ export default function StructuredBlock({
 
   const isWarm = kind === 'warmup';
   const doneCount = items.filter((i) => i.done).length;
+  // The checklist is a guide, not a target (Package M fix 8): an unticked
+  // warm-up/cool-down must never read as "0/8 done" (a failed score). Only
+  // show progress once something was actually ticked.
+  const when = isWarm ? 'before you start' : 'after the work';
   const sub = items.length
-    ? `${doneCount}/${items.length} done · ${isWarm ? 'before you start' : 'after the work'}`
-    : isWarm
-      ? 'before you start'
-      : 'after the work';
+    ? doneCount > 0
+      ? `${doneCount}/${items.length} done · ${when}`
+      : `${items.length} item${items.length === 1 ? '' : 's'} · ${when}`
+    : when;
 
   return (
     <details open style={{ marginTop: 14 }}>

@@ -30,6 +30,10 @@ const emptyRow = (): PlanRow => ({
   notes: '',
 });
 
+// Fix (Package M item 1): numeric inputs select-all on focus so a re-type
+// replaces the old value instead of appending to it.
+const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => { try { e.currentTarget.select(); } catch { /* ignore */ } };
+
 export default function NewPlanPage() {
   const router = useRouter();
   const [date, setDate] = useState(isoDate(new Date()));
@@ -170,6 +174,7 @@ export default function NewPlanPage() {
               <input
                 type="number"
                 inputMode="numeric"
+                onFocus={selectAllOnFocus}
                 value={r.sets}
                 onChange={(e) => update(i, { sets: e.target.value })}
                 placeholder="4"
@@ -180,6 +185,7 @@ export default function NewPlanPage() {
               <input
                 type="number"
                 inputMode="numeric"
+                onFocus={selectAllOnFocus}
                 value={r.reps}
                 onChange={(e) => update(i, { reps: e.target.value })}
                 placeholder="6"
@@ -190,6 +196,7 @@ export default function NewPlanPage() {
               <input
                 type="number"
                 inputMode="decimal"
+                onFocus={selectAllOnFocus}
                 value={r.weightKg}
                 onChange={(e) => update(i, { weightKg: e.target.value })}
                 placeholder="kg"

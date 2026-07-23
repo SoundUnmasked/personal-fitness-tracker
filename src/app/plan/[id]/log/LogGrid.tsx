@@ -69,6 +69,9 @@ function playTone(freq = 760, durSec = 0.14, peak = 0.22): void {
 function vibrate(pattern: number | number[]): void {
   try { navigator.vibrate?.(pattern); } catch { /* no haptics */ }
 }
+// Fix 1: focusing a native numeric input selects its content, so the first
+// keystroke replaces the old value instead of appending to it.
+const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => { try { e.currentTarget.select(); } catch { /* ignore */ } };
 // Strict metronome: every tick is identical (item 1). No vibration in the loop.
 const TICK_FREQ = 880, TICK_DUR = 0.045, TICK_PEAK = 0.2;
 // Rest end-warning tones (item 2a): distinct at T-3 and at zero.
@@ -100,7 +103,7 @@ export interface LogPlan {
   exercises: LogExercise[];
 }
 
-interface SetRow { kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; }
+interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; }
 type Field = 'kg' | 'reps' | 'rpe' | 'dur';
 
 function initSets(ex: LogExercise): SetRow[] {
@@ -110,9 +113,12 @@ function initSets(ex: LogExercise): SetRow[] {
   const dur = ex.setStyle === 'duration' && ex.durationSeconds != null ? String(ex.durationSeconds) : '';
   const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
   const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
-  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', done: false, prevKg, prevReps, warmup: false }));
+  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', rpeHi: '', done: false, prevKg, prevReps, warmup: false }));
 }
-const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', done: false, prevKg: '', prevReps: '', warmup });
+const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup });
+/** RPE cell text: half-points as typed; ranges as "7-8" (fix 4). */
+const rpeDisplay = (st: Pick<SetRow, 'rpe' | 'rpeHi'>): string =>
+  st.rpe === '' ? '' : st.rpeHi ? `${st.rpe}-${st.rpeHi}` : st.rpe;
 // Working-set number for a row = count of non-warmup rows up to and including it.
 function workingNo(rows: SetRow[], si: number): number {
   let n = 0;
@@ -123,6 +129,9 @@ function workingCount(rows: SetRow[]): number { return rows.filter((r) => !r.war
 
 const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0-10', dur: 'TIME · SEC' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
+// Fix 9: the primary keypad button cycles fields before it logs, so its label
+// always states what pressing it will actually do.
+const NEXT_WORD: Record<Field, string> = { kg: 'weight', reps: 'reps', rpe: 'RPE', dur: 'time' };
 const NOTIFY_ASKED = 'pft:notify-asked';
 
 // Field cycle order depends on whether the movement is rep- or time-based, and
@@ -170,7 +179,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const swWasRunning = useRef(false);
 
   const activeEx = plan.exercises[active.ei];
-  const activeStyle: 'reps' | 'duration' = activeEx?.setStyle === 'duration' ? 'duration' : 'reps';
   const activeHasTempo = !!activeEx?.tempo;
   // Item 3: whether an exercise shows a KG field (weight planned/logged/history,
   // or Edit mode open to add one). Shared by the grid columns and the field cycle.
@@ -179,8 +187,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (!ex) return true;
     return ex.targetWeightKg != null || editEx === ei || (sets[ei]?.some((s) => s.kg !== '' || s.prevKg !== '') ?? false);
   };
-  const firstFieldFor = (ei: number): Field =>
-    fieldsForStyle(plan.exercises[ei]?.setStyle === 'duration' ? 'duration' : 'reps', showKgFor(ei))[0];
+  // Field cycle for a SPECIFIC row: warm-up rows drop RPE (fix 7 — warm-ups
+  // only need weight and reps/time).
+  const fieldsForRowAt = (ei: number, si: number): Field[] => {
+    const base = fieldsForStyle(plan.exercises[ei]?.setStyle === 'duration' ? 'duration' : 'reps', showKgFor(ei));
+    return sets[ei]?.[si]?.warmup ? base.filter((f) => f !== 'rpe') : base;
+  };
 
   // --- draft persistence (item 4) -------------------------------------------
   // Mirror live state into refs so lifecycle handlers (pagehide / unmount) can
@@ -229,9 +241,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         // synchronously. The ticking effect captured base=0 from elapsedRef
         // before this state update lands, so without re-anchoring the first
         // tick recomputes from 0 and wipes the restored value back to 0:00.
-        setElapsed(d.elapsed);
-        elapsedRef.current = d.elapsed;
-        elapsedClock.current = { base: d.elapsed, since: Date.now() };
+        //
+        // Fix 6: a draft left RUNNING (accidental back-out, "keep running")
+        // also counts the time spent away — the clock genuinely kept going.
+        // Explicitly paused drafts restore frozen at their saved value.
+        const away = !d.paused && typeof d.updatedAt === 'number'
+          ? Math.max(0, Math.floor((Date.now() - d.updatedAt) / 1000))
+          : 0;
+        const el = d.elapsed + away;
+        setElapsed(el);
+        elapsedRef.current = el;
+        elapsedClock.current = { base: el, since: Date.now() };
       }
       if (Array.isArray(d.warmup)) setWarmup(d.warmup);
       if (Array.isArray(d.cooldown)) setCooldown(d.cooldown);
@@ -246,20 +266,52 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan.id]);
 
-  // Save + implicitly pause when the page is hidden or torn down (real back-out
-  // on mobile). visibilitychange/pagehide cover backgrounding & tab discard;
-  // the unmount cleanup covers in-app client-side navigation (the back button).
+  // Save when the page is hidden or torn down (real back-out on mobile).
+  // visibilitychange/pagehide cover backgrounding & tab discard; the unmount
+  // cleanup covers in-app client-side navigation (the back button).
+  //
+  // Fix 6: an ACCIDENTAL exit no longer force-pauses the session — the draft
+  // keeps the session's actual pause state, so the timer is still "running"
+  // and re-entry adds the time spent away. Only the explicit pause toggle and
+  // "Save and come back later" (exitPausedRef=true) freeze the clock.
   useEffect(() => {
-    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); };
-    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); };
+    const dispositionPaused = () => exitPausedRef.current ?? pausedRef.current;
+    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); };
+    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); };
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', onPageHide);
-      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, exitPausedRef.current ?? true)); // client-side nav away
+      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); // client-side nav away
     };
   }, [buildDraft]);
+
+  // Fix 6: Android's Back gesture is how people dismiss the keypad, and it was
+  // navigating out of the whole session. While a bottom panel is open we park a
+  // sentinel entry on the history stack; Back then pops the sentinel and we
+  // just close the panel — no navigation, timers untouched. With the panel
+  // closed, Back behaves normally (and the draft save above keeps the clock
+  // running through any accidental exit).
+  const panelStateRef = useRef(panel);
+  useEffect(() => { panelStateRef.current = panel; }, [panel]);
+  const backTrapArmed = useRef(false);
+  useEffect(() => {
+    if (panel !== 'hidden' && !backTrapArmed.current) {
+      // Clone the router's own state into the sentinel entry — a foreign state
+      // object desyncs Next's history index and makes the NEXT real Back
+      // overshoot by an entry.
+      try { window.history.pushState({ ...(window.history.state ?? {}), pftKeypad: true }, ''); backTrapArmed.current = true; } catch { /* history unavailable */ }
+    }
+  }, [panel]);
+  useEffect(() => {
+    const onPop = () => {
+      backTrapArmed.current = false;
+      if (panelStateRef.current !== 'hidden') setPanel('hidden');
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // --- screen wake lock (item 2c) -------------------------------------------
   const wakeRef = useRef<WakeLockSentinel | null>(null);
@@ -460,19 +512,41 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     }
   }
 
+  // Fix 1: entering a cell arms "replace mode" — the first keystroke replaces
+  // the whole pre-filled value (select-all semantics), so re-typing 30 over 40
+  // gives 30, not 4030. Any later keystroke appends as before.
+  const entryFresh = useRef(false);
+
   function tap(ei: number, si: number, field: Field) {
+    if (sets[ei]?.[si]?.warmup && field === 'rpe') return; // fix 7: no RPE on warm-up rows
     if (sw.running) { if (swTimer.current) clearInterval(swTimer.current); setSw((s) => ({ ...s, running: false })); }
+    entryFresh.current = true;
     setActive({ ei, si, field }); setPanel('entry');
   }
   function press(v: string) {
+    const fresh = entryFresh.current;
+    entryFresh.current = false;
     updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
       if (si !== active.si) return row;
-      let cur = row[active.field] || '';
-      if (v === 'back') cur = cur.slice(0, -1);
+      // First keystroke after entering the cell starts from empty (fix 1);
+      // backspace on a fresh cell clears it, like deleting a selection.
+      let cur = fresh ? '' : (row[active.field] || '');
+      if (v === 'back') cur = fresh ? '' : cur.slice(0, -1);
       else if (v === '.') cur = cur.includes('.') ? cur : (cur === '' ? '0.' : cur + '.');
       else if (cur.replace('.', '').length < 4) cur = cur + v;
-      return { ...row, [active.field]: cur };
+      // Editing the RPE value abandons any "7 or 8" range (fix 4).
+      const patch: Partial<SetRow> = { [active.field]: cur };
+      if (active.field === 'rpe') patch.rpeHi = '';
+      return { ...row, ...patch };
     })));
+  }
+  // Fix 4: one-tap "unsure" — records the current RPE as a range "v or v+1".
+  // Tapping again returns to the exact value.
+  function toggleRpeRange() {
+    const row = sets[active.ei]?.[active.si];
+    if (!row || row.rpe === '') return;
+    const hi = row.rpeHi ? '' : String(Math.min(10, Number(row.rpe) + 1));
+    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, rpeHi: hi } : r)));
   }
   function toggle(ei: number, si: number) {
     unlockAudio();
@@ -481,23 +555,30 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // updater runs synchronously (it depends on other pending updates, e.g. the
     // per-second clock), so reading it back on the next line was unreliable and
     // could skip the rest-timer auto-start (issue 8).
-    const nowDone = !(sets[ei]?.[si]?.done ?? false);
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, done: nowDone } : row)));
-    // Issue 8: ticking a set done auto-starts THIS exercise's rest timer.
-    if (nowDone) startRest(restFor(ei));
+    const row = sets[ei]?.[si];
+    const nowDone = !(row?.done ?? false);
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone } : r)));
+    // Ticking a set auto-starts THIS exercise's rest timer — but NEVER resets
+    // one that is already counting (fix 2), and warm-up rows don't start rest
+    // at all (fix 7).
+    if (nowDone && !row?.warmup && !rest.running) startRest(restFor(ei));
   }
   function next() {
     unlockAudio();
-    const order = fieldsForStyle(activeStyle, showKgFor(active.ei));
+    const order = fieldsForRowAt(active.ei, active.si);
     const idx = order.indexOf(active.field);
-    if (idx > -1 && idx < order.length - 1) { setActive({ ...active, field: order[idx + 1] }); return; }
-    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((row, s) => s === active.si ? { ...row, done: true } : row)));
+    if (idx > -1 && idx < order.length - 1) { entryFresh.current = true; setActive({ ...active, field: order[idx + 1] }); return; }
+    const row = sets[active.ei]?.[active.si];
+    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, done: true } : r)));
     const exSets = sets[active.ei];
     let na = active;
-    if (active.si + 1 < exSets.length) na = { ei: active.ei, si: active.si + 1, field: firstFieldFor(active.ei) };
-    else if (active.ei + 1 < sets.length) na = { ei: active.ei + 1, si: 0, field: firstFieldFor(active.ei + 1) };
+    if (active.si + 1 < exSets.length) na = { ei: active.ei, si: active.si + 1, field: fieldsForRowAt(active.ei, active.si + 1)[0] };
+    else if (active.ei + 1 < sets.length) na = { ei: active.ei + 1, si: 0, field: fieldsForRowAt(active.ei + 1, 0)[0] };
+    entryFresh.current = true;
     setActive(na);
-    startRest(restFor(active.ei));
+    // Same rest rules as toggle(): don't clobber a running timer (fix 2), no
+    // rest for warm-up rows (fix 7).
+    if (!row?.warmup && !rest.running) startRest(restFor(active.ei));
   }
   const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, emptyRow(false)] : rows));
 
@@ -599,6 +680,11 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
+  // Fix 9: what the primary button will do next for THIS row's field cycle.
+  const activeOrder = fieldsForRowAt(active.ei, active.si);
+  const activeFieldIdx = activeOrder.indexOf(active.field);
+  const nextField: Field | null =
+    activeFieldIdx > -1 && activeFieldIdx < activeOrder.length - 1 ? activeOrder[activeFieldIdx + 1] : null;
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
@@ -727,20 +813,26 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {editing ? (
-                          <button onClick={() => toggleRowWarmup(index, si)} aria-label={st.warmup ? `Make set ${wNo} a working set` : 'Mark as warm-up set'} aria-pressed={st.warmup} style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 13 : 16, fontWeight: 800, cursor: 'pointer', border: st.warmup ? '1px solid var(--accent-line)' : '1px dashed var(--border)', background: st.warmup ? 'var(--accent-soft)' : 'transparent', color: st.warmup ? 'var(--accent)' : 'var(--text-dim)' }}>
-                            {st.warmup ? <span className="msr" style={{ fontSize: 15 }} aria-hidden="true">whatshot</span> : wNo}
+                          <button onClick={() => toggleRowWarmup(index, si)} aria-label={st.warmup ? `Make set ${wNo} a working set` : 'Mark as warm-up set'} aria-pressed={st.warmup} style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 11 : 16, fontWeight: 800, letterSpacing: st.warmup ? '0.03em' : undefined, cursor: 'pointer', border: st.warmup ? '1px solid var(--accent-line)' : '1px dashed var(--border)', background: st.warmup ? 'var(--accent-soft)' : 'transparent', color: st.warmup ? 'var(--accent)' : 'var(--text-dim)' }}>
+                            {st.warmup ? 'WU' : wNo}
                           </button>
                         ) : (
-                          <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 13 : 16, fontWeight: 800, fontVariantNumeric: 'tabular-nums', color: badgeColor, background: badgeBg }}>
-                            {st.warmup ? <span className="msr-fill" style={{ fontSize: 15, color: 'var(--accent)' }} aria-hidden="true">whatshot</span> : wNo}
+                          // Fix 8: warm-up rows are labelled with plain "WU" text —
+                          // the old icon glyph rendered blank when the icon font
+                          // hadn't loaded (real-phone report).
+                          <div style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 11 : 16, fontWeight: 800, letterSpacing: st.warmup ? '0.03em' : undefined, fontVariantNumeric: 'tabular-nums', color: st.warmup && !st.done ? 'var(--accent)' : badgeColor, background: badgeBg }}>
+                            {st.warmup ? 'WU' : wNo}
                           </div>
                         )}
                       </div>
+                      {/* Fix 5: PREV shows what was lifted AND for how many reps;
+                          bodyweight history shows its reps alone. A reps label is
+                          only rendered when there is a number to put next to it. */}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 1, lineHeight: 1.15 }}>
-                        {st.prevKg ? (
+                        {st.prevKg || st.prevReps ? (
                           <>
-                            <div style={{ fontSize: 11, color: 'var(--text-dim)' }}><span style={{ color: 'var(--text)', fontWeight: 600 }}>{st.prevKg}</span> kg</div>
-                            <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{st.prevReps} reps</div>
+                            {st.prevKg && <div style={{ fontSize: 11, color: 'var(--text-dim)' }}><span style={{ color: 'var(--text)', fontWeight: 600 }}>{st.prevKg}</span> kg</div>}
+                            {st.prevReps && <div style={{ fontSize: 11, color: st.prevKg ? 'var(--text-faint)' : 'var(--text-dim)' }}>{!st.prevKg ? <span style={{ color: 'var(--text)', fontWeight: 600 }}>{st.prevReps}</span> : st.prevReps} reps</div>}
                           </>
                         ) : <div style={{ fontSize: 11, color: 'var(--text-faint)' }} title="No completed history for this movement">·</div>}
                       </div>
@@ -750,7 +842,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       ) : (
                         <Cell active={rowActive && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
                       )}
-                      <Cell active={rowActive && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={st.rpe} />
+                      {st.warmup
+                        ? <div aria-hidden="true" /> /* fix 7: warm-up rows have no RPE */
+                        : <Cell active={rowActive && active.field === 'rpe'} filled={st.rpe !== ''} onClick={() => tap(index, si, 'rpe')} value={rpeDisplay(st)} />}
                       {editing ? (
                         <button onClick={() => setDeleteTarget({ ei: index, si })} aria-label={st.warmup ? 'Delete warm-up set' : `Delete set ${wNo}`} style={{ width: 44, height: 44, borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, cursor: 'pointer', background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)' }}>
                           <span className="msr" aria-hidden="true">delete</span>
@@ -832,10 +926,29 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11, padding: '0 2px' }}>
                   <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{activeSetLabel} · {FIELD_LABEL[active.field]}</div>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                    <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>{activeVal === '' ? '0' : activeVal}</div>
+                    <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>
+                      {activeVal === '' ? '0' : activeVal}
+                      {active.field === 'rpe' && activeRow?.rpeHi ? `-${activeRow.rpeHi}` : ''}
+                    </div>
                     <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>{FIELD_UNIT[active.field]}</div>
                   </div>
                 </div>
+
+                {/* Fix 4: one-tap honest uncertainty — "7 or 8" instead of a forced number. */}
+                {active.field === 'rpe' && (
+                  <button
+                    onClick={toggleRpeRange}
+                    disabled={activeVal === ''}
+                    aria-pressed={!!activeRow?.rpeHi}
+                    style={{ width: '100%', height: 44, marginBottom: 10, borderRadius: 13, fontSize: 13.5, fontWeight: 700, cursor: 'pointer', border: '1px solid var(--accent-line)', background: activeRow?.rpeHi ? 'var(--accent)' : 'var(--accent-soft)', color: activeRow?.rpeHi ? 'var(--on-accent)' : 'var(--accent)', opacity: activeVal === '' ? 0.5 : 1 }}
+                  >
+                    {activeRow?.rpeHi
+                      ? `Logged as ${activeVal} or ${activeRow.rpeHi} · tap for exactly ${activeVal}`
+                      : activeVal === ''
+                        ? 'Unsure? Enter an RPE first'
+                        : `Unsure? Log as ${activeVal} or ${Math.min(10, Number(activeVal) + 1)}`}
+                  </button>
+                )}
 
                 {active.field === 'dur' && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '10px 12px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--border)' }}>
@@ -857,7 +970,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     </button>
                   ))}
                 </div>
-                <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={next}>Log set<span className="msr-fill" style={{ fontSize: 20 }}>arrow_forward</span></button>
+                <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={next}>
+                  {nextField ? `Next: ${NEXT_WORD[nextField]}` : 'Log set'}
+                  <span className="msr-fill" style={{ fontSize: 20 }}>{nextField ? 'arrow_forward' : 'check'}</span>
+                </button>
               </>
             ) : panel === 'rest' ? (
               <div style={{ padding: '2px 2px 4px' }}>
@@ -1008,6 +1124,7 @@ function WarmCoolList({ kind, items, onPatch }: {
                       value={it.loggedWeightKg ?? ''}
                       placeholder={it.weightKg != null ? String(it.weightKg) : '·'}
                       onChange={(e) => { const v = e.target.value; onPatch(i, { loggedWeightKg: v === '' ? null : Number(v) }); }}
+                      onFocus={selectAllOnFocus}
                       aria-label={`${it.name} weight in kg`}
                       style={{ width: 58, height: 34, textAlign: 'center', borderRadius: 9, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 14, fontWeight: 600 }}
                     />
@@ -1340,11 +1457,11 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
         <div className="row" style={{ marginBottom: 14 }}>
           <div className="field" style={{ margin: 0 }}>
             <label>Overall RPE</label>
-            <input type="number" inputMode="numeric" value={rpeOverall} onChange={(e) => setRpe(e.target.value)} placeholder="1-10" />
+            <input type="number" inputMode="decimal" step={0.5} value={rpeOverall} onChange={(e) => setRpe(e.target.value)} onFocus={selectAllOnFocus} placeholder="1-10" />
           </div>
           <div className="field" style={{ margin: 0 }}>
             <label>Energy before</label>
-            <input type="number" inputMode="numeric" value={energyPre} onChange={(e) => setEnergy(e.target.value)} placeholder="1-5" />
+            <input type="number" inputMode="numeric" value={energyPre} onChange={(e) => setEnergy(e.target.value)} onFocus={selectAllOnFocus} placeholder="1-5" />
           </div>
         </div>
 
@@ -1353,11 +1470,11 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
             <div className="row" style={{ marginBottom: 14 }}>
               <div className="field" style={{ margin: 0 }}>
                 <label>Distance (km)</label>
-                <input type="number" inputMode="decimal" value={distanceKm} onChange={(e) => setDistance(e.target.value)} placeholder="Strava/Technogym" />
+                <input type="number" inputMode="decimal" value={distanceKm} onChange={(e) => setDistance(e.target.value)} onFocus={selectAllOnFocus} placeholder="Strava/Technogym" />
               </div>
               <div className="field" style={{ margin: 0 }}>
                 <label>Avg HR</label>
-                <input type="number" inputMode="numeric" value={avgHr} onChange={(e) => setAvgHr(e.target.value)} />
+                <input type="number" inputMode="numeric" value={avgHr} onChange={(e) => setAvgHr(e.target.value)} onFocus={selectAllOnFocus} />
               </div>
             </div>
             <div className="field">
