@@ -244,6 +244,13 @@ const fieldsForStyle = (style: 'reps' | 'duration', showKg: boolean): Field[] =>
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
 
+  // Package S1: a session with a recorded completion opens in EDIT mode, not as
+  // an active session. In edit mode the session clock never starts/resumes (any
+  // duration shown is the STORED value, static), rest timers and tempo do not
+  // auto-start, and no wake-lock/interval/notification is held — so leaving the
+  // editor leaks nothing.
+  const editMode = !!plan.completed;
+
   // Fix 1: a completed session opens on its saved actuals (pre-ticked); a
   // planned session opens on plan targets. A local draft (in-progress) still
   // overrides both, hydrated in the effect below.
@@ -364,7 +371,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         return Array.isArray(dr) && dr.length ? dr.map((r) => ({ ...emptyRow(), ...r })) : rows;
       }));
       if (d.active) setActive({ ...d.active, ei: Math.min(d.active.ei, plan.exercises.length - 1) });
-      if (typeof d.elapsed === 'number') {
+      // S1: in edit mode the clock is static (the stored duration), so a
+      // resumed edit draft never adds time-away and never re-seeds elapsed.
+      if (typeof d.elapsed === 'number' && !editMode) {
         // Restore the session clock AND re-anchor its wall-clock base
         // synchronously. The ticking effect captured base=0 from elapsedRef
         // before this state update lands, so without re-anchoring the first
@@ -463,12 +472,26 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // Hold the wake lock while the session is active and not paused; drop it when
   // paused. Re-acquire when the tab becomes visible again (the OS drops it on hide).
   useEffect(() => {
-    if (!paused && !finishing) acquireWake(); else releaseWake();
+    // S1: no wake lock in edit mode (there is no active session to keep awake).
+    if (!paused && !finishing && !editMode) acquireWake(); else releaseWake();
     return () => { releaseWake(); };
-  }, [paused, finishing, acquireWake, releaseWake]);
+  }, [paused, finishing, editMode, acquireWake, releaseWake]);
   useEffect(() => {
     const onVis = () => {
       if (document.visibilityState !== 'visible' || pausedRef.current || finishing) return;
+      if (editMode) {
+        // S1: on return from background, do NOT re-acquire the wake lock or
+        // advance the session clock — the stored duration stays static. Only a
+        // rest the user explicitly started is resynced below.
+        setRest((r) => {
+          if (!r.running) return r;
+          if (r.mode === 'up') return { ...r, up: Math.max(0, Math.floor((Date.now() - restUpStart.current) / 1000)) };
+          const rem = Math.max(0, Math.ceil((restEndAt.current - Date.now()) / 1000));
+          if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); return { ...r, remaining: 0, running: false }; }
+          return { ...r, remaining: rem };
+        });
+        return;
+      }
       acquireWake();
       // Item 6: on return, recompute both timers from the wall clock so they land
       // on the correct position instead of resuming from where the loop stalled.
@@ -484,13 +507,14 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     };
     document.addEventListener('visibilitychange', onVis);
     return () => document.removeEventListener('visibilitychange', onVis);
-  }, [acquireWake, finishing]);
+  }, [acquireWake, finishing, editMode]);
 
   // session elapsed clock — frozen while paused. Derived from wall-clock time so
   // background throttling can't make it drift (item 6): each tick recomputes
   // elapsed from a base + real elapsed since the anchor, not by incrementing.
+  // S1: in edit mode the clock never runs — the stored duration is static.
   useEffect(() => {
-    if (paused) return;
+    if (paused || editMode) return;
     elapsedClock.current = { base: elapsedRef.current, since: Date.now() };
     const recompute = () => {
       const c = elapsedClock.current;
@@ -498,7 +522,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     };
     const t = setInterval(recompute, 1000);
     return () => clearInterval(t);
-  }, [paused]);
+  }, [paused, editMode]);
   useEffect(() => () => {
     if (restTimer.current) clearInterval(restTimer.current);
     if (swTimer.current) clearInterval(swTimer.current);
@@ -743,9 +767,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // Ticking a suggested warm-up commits it.
     updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone, suggested: false } : r)));
     // Ticking a set auto-starts THIS exercise's rest timer — but NEVER resets
-    // one that is already counting (fix 2), and warm-up rows don't start rest
-    // at all (fix 7).
-    if (nowDone && !row?.warmup && !rest.running) startRest(restFor(ei));
+    // one that is already counting (fix 2), warm-up rows don't start rest at all
+    // (fix 7), and in EDIT mode ticking never triggers a rest timer (S1.3 — the
+    // user may still tap a rest timer explicitly).
+    if (nowDone && !row?.warmup && !rest.running && !editMode) startRest(restFor(ei));
   }
   function next() {
     unlockAudio();
@@ -761,8 +786,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     entryFresh.current = true;
     setActive(na);
     // Same rest rules as toggle(): don't clobber a running timer (fix 2), no
-    // rest for warm-up rows (fix 7).
-    if (!row?.warmup && !rest.running) startRest(restFor(active.ei));
+    // rest for warm-up rows (fix 7), no auto-rest in edit mode (S1.3).
+    if (!row?.warmup && !rest.running && !editMode) startRest(restFor(active.ei));
   }
   const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, emptyRow(false)] : rows));
 
@@ -924,18 +949,26 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
           <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
-            {plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>
-            {paused && <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}> · PAUSED</span>}
+            {editMode ? (
+              // S1: edit mode shows EDITING and, if a duration was recorded, the
+              // STORED value as a static (non-accent, non-ticking) figure.
+              <>{plan.type} · <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}>EDITING</span>{plan.completed?.durationMin != null && <span style={{ color: 'var(--text-dim)' }}> · {mmss(plan.completed.durationMin * 60)}</span>}</>
+            ) : (
+              <>{plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>{paused && <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}> · PAUSED</span>}</>
+            )}
           </div>
         </div>
-        <button
-          className="icon-btn"
-          onClick={() => (paused ? resumeSession() : pauseSession())}
-          aria-label={paused ? 'Resume session' : 'Pause session'}
-          aria-pressed={paused}
-          style={paused ? { background: 'var(--accent-soft)', color: 'var(--accent)', borderColor: 'var(--accent-line)' } : undefined}
-        ><span className="msr" aria-hidden="true">{paused ? 'play_arrow' : 'pause'}</span></button>
-        <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>Finish</button>
+        {/* S1: no pause/resume control in edit mode (no running clock to pause). */}
+        {!editMode && (
+          <button
+            className="icon-btn"
+            onClick={() => (paused ? resumeSession() : pauseSession())}
+            aria-label={paused ? 'Resume session' : 'Pause session'}
+            aria-pressed={paused}
+            style={paused ? { background: 'var(--accent-soft)', color: 'var(--accent)', borderColor: 'var(--accent-line)' } : undefined}
+          ><span className="msr" aria-hidden="true">{paused ? 'play_arrow' : 'pause'}</span></button>
+        )}
+        <button className="btn-sm" style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)', height: 32 }} onClick={() => setFinishing(true)}>{editMode ? 'Save' : 'Finish'}</button>
       </div>
 
       {resumeToast && (

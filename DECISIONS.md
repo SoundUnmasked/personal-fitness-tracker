@@ -6,6 +6,34 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package S — timer lifecycle, duration protection, RPE dash
+
+- **S1: no session timer in edit mode.** A completed session (`plan.completed`)
+  now opens in EDIT mode: the header reads "EDITING · <stored duration>" as a
+  static value; the session-clock interval, wall-clock resync, and wake-lock are
+  all gated off; the pause control is hidden; and ticking a set does NOT
+  auto-start a rest timer (the user may still tap a rest explicitly). Tempo
+  already only starts on an explicit tap. Nothing (interval/timeout/
+  notification/wake-lock) is left running when leaving the editor.
+- **S2 (critical): duration is WRITE-ONCE.** `saveCompletedActuals` reads the
+  session's current `durationMin` inside the transaction and, if it already has
+  one, omits duration from the update — a re-save can never overwrite recorded
+  time (protects e.g. the 22 July 85m). Only an explicit `durationOverride:
+  true` (a deliberate edit of the duration field, not wired to any save-sets
+  path) may replace it. In edit mode the client clock is static anyway, so it
+  sends the stored value; the server guard is the authoritative protection.
+  Regression tests in `tests/package-s.test.ts` (85m survives repeated re-saves,
+  a null cannot erase it, override works, a duration-less session can still gain
+  one later).
+- **S3: RPE dash — checked, nothing to fix.** Every RPE-range render already
+  uses a plain ASCII hyphen: the logging grid (`rpeDisplay`, entry readout) and
+  the completed view all format `${rpe}-${rpeHigh}`. Exports write only the
+  single `set.rpe` value (no range, no dash). Stored `rpe`/`rpe_high` are Float
+  columns and cannot hold a dash, so there is no en-dash data to migrate. The
+  only en/em dashes in the repo are in code comments and CSS.
+
+---
+
 # Package R — fix "Edit logged sets" + notes truncation
 
 - **Fix 1 (critical): the logger hydrates from the DB for a completed session.**
