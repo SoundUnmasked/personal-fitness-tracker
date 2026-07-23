@@ -16,6 +16,7 @@ export interface DraftSetRow {
   kg: string; reps: string; dur: string; rpe: string; done: boolean; prevKg: string; prevReps: string;
   rpeHi?: string; // upper bound when RPE was logged as a range ("7 or 8")
   warmup?: boolean; // warm-up (ramp-up) row — sits above set 1, no set number
+  suggested?: boolean; // Package O: pre-populated warm-up suggestion (from last time)
 }
 import type { FlowItem } from './flowItems';
 
@@ -30,6 +31,8 @@ export interface SessionDraft {
   elapsed: number;   // session seconds at last save
   paused: boolean;   // true once backed-out / paused → shown as "Continue"
   updatedAt: number; // epoch ms
+  exNotes?: string[];   // Package O: per-exercise logged notes (by exercise index)
+  sessionNote?: string; // Package O: session-level note
 }
 
 const KEY = (id: number) => `pft:logdraft:v2:${id}`;

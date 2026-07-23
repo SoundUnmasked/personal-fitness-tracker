@@ -75,6 +75,11 @@ export default async function PlannedSessionPreview({
             distanceKm: r.distanceKm, durationMin: r.durationMin, avgPace: r.avgPace,
             avgHr: r.avgHr, maxHr: r.maxHr, hrSource: r.hrSource, calfRaisesDone: r.calfRaisesDone, notes: r.notes,
           })),
+          // Package O: per-exercise logged notes, keyed by exercise name.
+          exerciseNotes: session.plannedExercises.reduce<Record<string, string>>((acc, e) => {
+            if (e.loggedNote) acc[e.exerciseName] = e.loggedNote;
+            return acc;
+          }, {}),
         }}
       />
     );
