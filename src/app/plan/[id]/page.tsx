@@ -147,7 +147,9 @@ export default async function PlannedSessionPreview({
       <div className="topbar">
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
         <div style={{ flex: 1 }} />
-        <Link href="/plan/new" className="icon-btn dim"><span className="msr">edit</span></Link>
+        {/* Package Q: the pencil now opens THIS session's editor, not the
+            new-session chooser (which was a misleading dead end). */}
+        <Link href={`/plan/${session.id}/edit`} className="icon-btn dim" aria-label="Edit session"><span className="msr">edit</span></Link>
         <SessionActions
           sessionId={session.id}
           dateIso={isoDate(session.date)}

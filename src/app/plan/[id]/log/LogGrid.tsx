@@ -318,8 +318,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     requestPersistentStorage();
     const d = readSessionDraft(plan.id);
     if (d && Array.isArray(d.sets) && d.sets.length) {
-      setSets(d.sets.map((rows) => rows.map((r) => ({ ...emptyRow(), ...r }))));
-      if (d.active) setActive(d.active);
+      // Package Q: reconcile the draft against the CURRENT plan (it may have
+      // been edited mid-session — movements added/removed/reordered). Map over
+      // the plan's exercises: keep the draft's rows where they exist, and give a
+      // newly-added movement its fresh initial rows. Extra draft columns (a
+      // removed movement) fall away because we iterate the plan, not the draft.
+      const base = plan.exercises.map(initSets);
+      setSets(base.map((rows, i) => {
+        const dr = d.sets[i];
+        return Array.isArray(dr) && dr.length ? dr.map((r) => ({ ...emptyRow(), ...r })) : rows;
+      }));
+      if (d.active) setActive({ ...d.active, ei: Math.min(d.active.ei, plan.exercises.length - 1) });
       if (typeof d.elapsed === 'number') {
         // Restore the session clock AND re-anchor its wall-clock base
         // synchronously. The ticking effect captured base=0 from elapsedRef

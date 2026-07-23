@@ -6,6 +6,34 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package Q — session editing
+
+- **Edit a planned session's contents (item 1).** New `/plan/[id]/edit` route
+  (server page + `EditForm` client) and `updatePlanAction` /
+  `updatePlannedSession`. Add / remove / reorder movements (up-down controls;
+  input order becomes the new `order`) and change every target — sets, reps,
+  weight, rest, tempo, superset, per-movement note. Allowed for any PLANNED
+  session, including today's and one mid-log (a session stays `planned` until
+  finished); completed sessions redirect to their detail view ("Edit logged
+  sets" is the path for those). The update replaces `plannedExercises`
+  wholesale in one transaction and never touches logged actuals.
+- **Mid-session safety.** The logger's draft hydration now reconciles the draft
+  against the CURRENT plan: it maps over the plan's exercises, keeping draft
+  rows where they exist and giving a newly-added movement fresh rows, so
+  editing structure mid-session can't desync/crash the in-progress draft
+  (verified: ticked set retained, added movement appears, no crash).
+- **Editable warm-up and cool-down (items 2, 3).** A lightweight list editor
+  (add / remove / reorder / annotate with detail + optional weight), reused for
+  both. The cool-down comfortably holds a full multi-item stretching routine
+  (stored as the same structured FlowItem JSON).
+- **Pencil fixed (item 4).** The planned preview's pencil pointed at
+  `/plan/new` (the new-session chooser — a dead end); it now opens
+  `/plan/[id]/edit`.
+- Tests: `tests/package-q.test.ts` (replace movements incl. add/remove/reorder,
+  retarget, multi-item cool-down; no strength_sets created, no orphan rows).
+
+---
+
 # Package P — tempo block
 
 - **Region-based engine (item 1).** New pure `lib/tempo.ts` parses a notation
