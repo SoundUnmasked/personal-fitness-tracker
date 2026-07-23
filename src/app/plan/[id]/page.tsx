@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
-import { shortDate, isoDate } from '@/lib/format';
+import { shortDate, isoDate, fmtClock } from '@/lib/format';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
 import SessionActions from '@/components/SessionActions';
@@ -22,10 +22,8 @@ interface PreviewExercise {
   note: string | null;
 }
 
-/** Seconds → "2:00" (≥1 min) or "45s". */
-function restLabel(sec: number): string {
-  return sec >= 60 ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : `${sec}s`;
-}
+/** Seconds -> "0:00" (Package N item 5: always this format). */
+const restLabel = fmtClock;
 interface Block {
   isSuperset: boolean;
   tag: string;
@@ -101,8 +99,8 @@ export default async function PlannedSessionPreview({
     const timed = e.setStyle === 'duration';
     const scheme = timed
       ? (e.targetSets != null
-          ? `${e.targetSets} × ${e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed'}`
-          : e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed')
+          ? `${e.targetSets} × ${e.durationSeconds != null ? fmtClock(e.durationSeconds) : 'timed'}`
+          : e.durationSeconds != null ? fmtClock(e.durationSeconds) : 'timed')
       : fmtScheme(e.targetSets, e.targetReps);
     return {
       name: e.exerciseName,

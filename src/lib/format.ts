@@ -1,5 +1,23 @@
 // Small formatting / parsing helpers shared by UI and sync code.
 
+/**
+ * The one true time format (Package N item 5): seconds -> "M:SS", rolling over
+ * to "H:MM:SS" past an hour. Never "45s", never "1 min", never mixed units.
+ * Used for rest timers, the session clock, and every logged/duration time.
+ */
+export function fmtClock(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+
+/** Minutes -> "M:SS" style clock (whole minutes come in as e.g. a session's durationMin). */
+export function fmtClockFromMinutes(totalMinutes: number): string {
+  return fmtClock(Math.round(totalMinutes * 60));
+}
+
 /** Format a Date (or ISO string) as "Mon 16 Jun". */
 export function shortDate(d: Date | string): string {
   const date = typeof d === 'string' ? new Date(d) : d;
