@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import {
   validatePlannedSession,
   createPlannedSession,
+  updatePlannedSession,
   saveCompletedActuals,
   intOrNull,
   floatOrNull,
@@ -37,6 +38,28 @@ export async function createPlanAction(input: unknown): Promise<ActionResult> {
   revalidatePath('/');
   revalidatePath('/plan');
   return { ok: true, id: session.id };
+}
+
+/**
+ * Package Q: edit a planned session's contents in-app (movements, targets,
+ * warm-up, cool-down, title/type/notes). Allowed for any PLANNED session,
+ * including today's and one currently being logged (still `planned` until it is
+ * finished). Completed sessions are edited via "Edit logged sets" instead.
+ */
+export async function updatePlanAction(sessionId: number, input: unknown): Promise<ActionResult> {
+  const existing = await prisma.session.findUnique({ where: { id: sessionId }, select: { status: true } });
+  if (!existing) return { ok: false, error: 'Session not found.' };
+  if (existing.status !== 'planned') {
+    return { ok: false, error: 'Only planned sessions can be edited here. Use "Edit logged sets" for a completed session.' };
+  }
+  const result = validatePlannedSession(input);
+  if (!result.ok || !result.value) return { ok: false, error: result.error };
+
+  await updatePlannedSession(prisma, sessionId, result.value);
+  revalidatePath('/');
+  revalidatePath('/plan');
+  revalidatePath(`/plan/${sessionId}`);
+  return { ok: true, id: sessionId };
 }
 
 /**

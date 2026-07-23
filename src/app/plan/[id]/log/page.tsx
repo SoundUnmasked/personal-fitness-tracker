@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
-import { previousWeights } from '@/lib/plannedSessions';
+import { previousWeights, previousWarmups, reconstructCompletedRows } from '@/lib/plannedSessions';
 import { hasRunComponent, needsCooldownPrompt } from '@/lib/rules';
 import { readFlow } from '@/lib/flowItems';
 import LogGrid, { type LogPlan } from './LogGrid';
@@ -14,18 +14,38 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
 
   const session = await prisma.session.findUnique({
     where: { id: sessionId },
-    include: { plannedExercises: { orderBy: { order: 'asc' } } },
+    include: {
+      plannedExercises: { orderBy: { order: 'asc' } },
+      // Package R fix 1: for a completed session we hydrate the logger from the
+      // DATABASE (there is no local draft — it was cleared on Finish).
+      strengthSets: { orderBy: { id: 'asc' } },
+    },
   });
   if (!session) notFound();
 
-  const prev = await previousWeights(
-    prisma,
-    session.plannedExercises.map((e) => e.exerciseName),
-    session.date,
-  );
+  const names = session.plannedExercises.map((e) => e.exerciseName);
+  const [prev, prevWarm] = await Promise.all([
+    previousWeights(prisma, names, session.date),
+    previousWarmups(prisma, names, session.date),
+  ]);
 
   const warm = readFlow(session.warmup);
   const cool = readFlow(session.cooldown);
+
+  // Package R fix 1: reconstruct the recorded actuals, aligned to the planned
+  // exercises by name, so "Edit logged sets" opens on exactly what was saved
+  // (pre-ticked) rather than a blank plan.
+  let completed: LogPlan['completed'] = null;
+  if (session.status === 'completed') {
+    completed = {
+      durationMin: session.durationMin,
+      rpeOverall: session.rpeOverall,
+      energyPre: session.energyPre,
+      sessionNote: session.notes ?? '',
+      totalSets: session.strengthSets.length,
+      exercises: reconstructCompletedRows(session.plannedExercises, session.strengthSets),
+    };
+  }
 
   const plan: LogPlan = {
     id: session.id,
@@ -51,8 +71,12 @@ export default async function LogPage({ params }: { params: Promise<{ id: string
         superset: e.supersetGroup,
         prevKg: p?.weightKg ?? null,
         prevReps: p?.reps ?? null,
+        planNote: e.notes ?? null,
+        loggedNote: e.loggedNote ?? null,
+        prevWarmups: prevWarm[e.exerciseName] ?? [],
       };
     }),
+    completed,
   };
 
   return <LogGrid plan={plan} />;

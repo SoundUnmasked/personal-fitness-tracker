@@ -9,7 +9,7 @@
 // v3: bumped so activate() purges every older cache — guarantees a device
 // picks up new JS/HTML rather than an old cached bundle. Also dropped the
 // removed /log/strength route from the precache SHELL.
-const CACHE = 'pft-shell-v3';
+const CACHE = 'pft-shell-v4';
 const SHELL = ['/', '/checkin', '/inbody', '/sync', '/manifest.webmanifest'];
 const STATIC_PREFIXES = ['/_next/static/', '/fonts/', '/icons/'];
 
@@ -27,6 +27,22 @@ self.addEventListener('activate', (event) => {
     ),
   );
   self.clients.claim();
+});
+
+// Package N: tapping the ongoing rest notification refocuses the app (or opens
+// it) rather than doing nothing. The notification itself is shown/closed by the
+// page (navigator.serviceWorker.ready.showNotification), so this only handles
+// the click-through.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const c of clients) {
+        if ('focus' in c) return c.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('/');
+    }),
+  );
 });
 
 self.addEventListener('fetch', (event) => {

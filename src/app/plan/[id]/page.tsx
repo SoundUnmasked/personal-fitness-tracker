@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { prisma } from '@/lib/prisma';
 import { previousWeights } from '@/lib/plannedSessions';
-import { shortDate, isoDate } from '@/lib/format';
+import { shortDate, isoDate, fmtClock } from '@/lib/format';
+import NoteText from '@/components/NoteText';
 import CompletedView from './CompletedView';
 import StructuredBlock from '@/components/StructuredBlock';
 import SessionActions from '@/components/SessionActions';
@@ -22,10 +23,8 @@ interface PreviewExercise {
   note: string | null;
 }
 
-/** Seconds → "2:00" (≥1 min) or "45s". */
-function restLabel(sec: number): string {
-  return sec >= 60 ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}` : `${sec}s`;
-}
+/** Seconds -> "0:00" (Package N item 5: always this format). */
+const restLabel = fmtClock;
 interface Block {
   isSuperset: boolean;
   tag: string;
@@ -77,6 +76,11 @@ export default async function PlannedSessionPreview({
             distanceKm: r.distanceKm, durationMin: r.durationMin, avgPace: r.avgPace,
             avgHr: r.avgHr, maxHr: r.maxHr, hrSource: r.hrSource, calfRaisesDone: r.calfRaisesDone, notes: r.notes,
           })),
+          // Package O: per-exercise logged notes, keyed by exercise name.
+          exerciseNotes: session.plannedExercises.reduce<Record<string, string>>((acc, e) => {
+            if (e.loggedNote) acc[e.exerciseName] = e.loggedNote;
+            return acc;
+          }, {}),
         }}
       />
     );
@@ -101,8 +105,8 @@ export default async function PlannedSessionPreview({
     const timed = e.setStyle === 'duration';
     const scheme = timed
       ? (e.targetSets != null
-          ? `${e.targetSets} × ${e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed'}`
-          : e.durationSeconds != null ? `${e.durationSeconds}s` : 'timed')
+          ? `${e.targetSets} × ${e.durationSeconds != null ? fmtClock(e.durationSeconds) : 'timed'}`
+          : e.durationSeconds != null ? fmtClock(e.durationSeconds) : 'timed')
       : fmtScheme(e.targetSets, e.targetReps);
     return {
       name: e.exerciseName,
@@ -144,7 +148,9 @@ export default async function PlannedSessionPreview({
       <div className="topbar">
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
         <div style={{ flex: 1 }} />
-        <Link href="/plan/new" className="icon-btn dim"><span className="msr">edit</span></Link>
+        {/* Package Q: the pencil now opens THIS session's editor, not the
+            new-session chooser (which was a misleading dead end). */}
+        <Link href={`/plan/${session.id}/edit`} className="icon-btn dim" aria-label="Edit session"><span className="msr">edit</span></Link>
         <SessionActions
           sessionId={session.id}
           dateIso={isoDate(session.date)}
@@ -163,7 +169,7 @@ export default async function PlannedSessionPreview({
           <div className="sub">{session.location}</div>
         </div>
         <div className="h1-lg" style={{ marginTop: 12 }}>{session.title || `${session.type} session`}</div>
-        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}>{session.notes}</div>}
+        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}><NoteText text={session.notes} max={160} /></div>}
       </div>
 
       {/* Totals */}
@@ -226,7 +232,7 @@ export default async function PlannedSessionPreview({
                         {ex.note && (
                           <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9 }}>
                             <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }}>push_pin</span>
-                            <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>{ex.note}</div>
+                            <div style={{ fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}><NoteText text={ex.note} max={120} /></div>
                           </div>
                         )}
                       </div>

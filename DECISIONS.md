@@ -6,6 +6,166 @@ here. Nothing requiring personal credentials was invented — all secrets are
 
 ---
 
+# Package R — fix "Edit logged sets" + notes truncation
+
+- **Fix 1 (critical): the logger hydrates from the DB for a completed session.**
+  "Edit logged sets" was opening a blank logger because the logger only ever
+  hydrated from the local draft, which is cleared on Finish. Now the log page
+  loads the saved `strengthSets` when `status === 'completed'` and builds a
+  `completed` payload (`reconstructCompletedRows`, pure + tested) aligned to the
+  planned exercises; the grid opens with those sets **pre-ticked**, the recorded
+  RPE / energy / duration / session + per-exercise notes pre-filled, so the user
+  edits from exactly what was recorded. The local-draft path is unchanged for
+  in-progress sessions and still takes precedence (a backed-out edit resumes
+  from its draft).
+- **Fix 2 (critical safety): re-saving can't silently destroy history.** The
+  Finish sheet now compares the new ticked-set count against the session's
+  existing recorded count; if a re-save of a completed session would remove any
+  recorded set (fewer than on record, including dropping to zero) it blocks and
+  requires an explicit confirmation that states plainly what will be removed
+  ("This will delete all N recorded sets…" / "…removing M"). Cancel leaves the
+  DB untouched. Belt-and-braces on top of fix 1 (which makes accidental wipes
+  far less likely by loading sets pre-ticked).
+- **Fix 3: long notes truncate with an in-place expander.** New shared
+  `components/NoteText` shows a word-boundary-truncated portion with a
+  "See full note" / "Show less" toggle. Applied to per-exercise and session
+  notes in the logger, the completed view, and the planned preview.
+- Tests: `tests/package-r.test.ts` — `reconstructCompletedRows` alignment +
+  values (incl. warm-up flags and RPE ranges), a DB round-trip proving a
+  completed session rebuilds to exactly what was saved, and the destructive-
+  re-save guard predicate plus a DB proof that a confirmed shrink really
+  reduces the rows.
+- No schema change in this package.
+
+---
+
+# Package Q — session editing
+
+- **Edit a planned session's contents (item 1).** New `/plan/[id]/edit` route
+  (server page + `EditForm` client) and `updatePlanAction` /
+  `updatePlannedSession`. Add / remove / reorder movements (up-down controls;
+  input order becomes the new `order`) and change every target — sets, reps,
+  weight, rest, tempo, superset, per-movement note. Allowed for any PLANNED
+  session, including today's and one mid-log (a session stays `planned` until
+  finished); completed sessions redirect to their detail view ("Edit logged
+  sets" is the path for those). The update replaces `plannedExercises`
+  wholesale in one transaction and never touches logged actuals.
+- **Mid-session safety.** The logger's draft hydration now reconciles the draft
+  against the CURRENT plan: it maps over the plan's exercises, keeping draft
+  rows where they exist and giving a newly-added movement fresh rows, so
+  editing structure mid-session can't desync/crash the in-progress draft
+  (verified: ticked set retained, added movement appears, no crash).
+- **Editable warm-up and cool-down (items 2, 3).** A lightweight list editor
+  (add / remove / reorder / annotate with detail + optional weight), reused for
+  both. The cool-down comfortably holds a full multi-item stretching routine
+  (stored as the same structured FlowItem JSON).
+- **Pencil fixed (item 4).** The planned preview's pencil pointed at
+  `/plan/new` (the new-session chooser — a dead end); it now opens
+  `/plan/[id]/edit`.
+- Tests: `tests/package-q.test.ts` (replace movements incl. add/remove/reorder,
+  retarget, multi-item cool-down; no strength_sets created, no orphan rows).
+
+---
+
+# Package P — tempo block
+
+- **Region-based engine (item 1).** New pure `lib/tempo.ts` parses a notation
+  (3030, 3110, 31X1, 3-digit 303) into its four explicit regions — eccentric
+  (Lower), isometric bottom (Pause), concentric (Lift), rest/hold at top (Hold)
+  — dropping zero-length regions. The player drives a DISTINCT audible cue per
+  region (its own pitch: lower for the descent, higher for the lift), plus a
+  soft interior sub-tick each whole second, replacing the old flat one-tick-a-
+  second metronome. An "X" concentric is an explosive accent. This deliberately
+  supersedes the earlier "one identical tick every second" tempo behaviour.
+- **Setup delay (item 2).** Pressing Start runs a configurable delay
+  (presets 5/10/15s, default 10, or Off) with a visible "GET SET UP" countdown
+  and soft ticks, then a clear rising "starting now" cue (523->784, distinct
+  from the rest-end chime) as the tempo begins — so the first rep isn't already
+  counting while you unrack.
+- **Its own block, superset-aware (item 3).** Tempo is a coherent panel (not
+  embedded in the grid) that auto-loads the active exercise's prescribed tempo.
+  Inside a superset it shows tabs for the sibling movements that carry a tempo;
+  tapping one makes it active and auto-loads its notation, so alternating A/B
+  works cleanly.
+- **No rep-number callout (item 4).** Deliberately not added (deferred).
+- **Background note:** tempo runs on requestAnimationFrame, which the browser
+  suspends when backgrounded — acceptable, since tempo reps are a foreground,
+  screen-on activity (the wake lock keeps the screen alive).
+- Tests: `tests/tempo.test.ts` covers the region parsing (3030/3110/31X1/303,
+  junk, cycle length).
+
+---
+
+# Package O — per-exercise notes and warm-up memory
+
+- **Per-exercise notes (item 1).** New additive column
+  `planned_exercises.logged_note` (registered in turso-push ADDITIVE_COLUMNS;
+  NOT applied to Turso here). Kept separate from the existing plan note
+  (`notes`, the coach cue shown on the preview). Written during logging via a
+  one-tap note button on each exercise card (and an inline preview of the
+  note); shown once per exercise on the completed view. Pre-filled from last
+  time's logged note, falling back to the plan note. Persisted per
+  planned-exercise `order` in `saveCompletedActuals` (empty clears to null).
+- **Session-level notes (item 2).** Already persisted via the Finish sheet
+  (`Session.notes`); Package O also makes it reachable mid-session through a
+  "Session note" button, sharing the same note-sheet editor and the draft. The
+  Finish sheet seeds its notes field from it.
+- **Warm-up memory (item 3).** New `previousWarmups()` reader (no column —
+  reads existing `is_warmup` sets). When an exercise had warm-up sets in its
+  most recent completed session, the logger pre-populates the SAME NUMBER of
+  warm-up rows with those weights/reps, flagged `suggested`. Rules honoured:
+  mirrors the most recent prior session only (never a fixed default), never
+  applied to an exercise with no history, always editable and removable (a
+  "Warm-up suggested from last time" banner with Dismiss; a dashed, dimmed row
+  style until ticked/edited, at which point it commits and reads as normal).
+- **No Turso migration run.** `logged_note` is additive and registered for the
+  owner to apply via `npm run db:push:turso`.
+
+---
+
+# Package N — timer system rework
+
+- **Ongoing rest notification (item 1).** While a countdown runs we show ONE
+  persistent notification (tag `pft-rest`) whose body is the rest END TIME, not
+  a live countdown — a live countdown would freeze when the JS timer is
+  throttled in the background, whereas an absolute end time stays useful. It's
+  `silent` (the audible cue is the in-app chime) and closed on
+  complete/skip/pause/finish. We deleted the old end-of-rest notification and
+  the dead `TimestampTrigger`/`showTrigger` path (Notification Triggers was
+  removed from Chromium). **Honest limits:** because web pages can't run a
+  reliable background timer, when the app is backgrounded the notification may
+  linger a few seconds past the true end until you refocus the app (which
+  closes it); and permission-denied degrades to in-app-only silently.
+- **Always-visible rest strip (item 2).** A fixed top strip shows the remaining
+  rest whenever a countdown/count-up is running, so it stays visible with the
+  keypad open, while tapping other sets, and while scrolled. Tapping it opens
+  the rest panel; the header is offset down while it shows.
+- **Typed rest (item 3).** Tap the big rest time to type an exact duration
+  ("M:SS" or plain seconds via `parseClockInput`); plus 60/90/120/180 quick
+  presets. -15/+15 kept.
+- **Count-up timer (item 4).** The rest panel has Countdown/Count-up modes.
+  Count-up is a wall-clock-anchored open-ended stopwatch; it does not capture
+  the lag between finishing and pressing start (accepted — the user adjusts).
+- **One time format (item 5).** New `fmtClock`/`fmtClockFromMinutes` in
+  `lib/format.ts` render every time as `M:SS` (rolling to `H:MM:SS` past an
+  hour). Applied to the session clock, rest timers, the count-up, logged set
+  durations, session/run durations, and plan target times. No more "45s" /
+  "1 min" / "45m".
+- **Countdown + distinct end sound (item 6).** Audible 3-2-1 blips (one low
+  same-pitch tick per second for the last three), then a rising two-note
+  triangle-wave CHIME at zero — deliberately unlike the tempo metronome's
+  single flat sine tick, because it means "start your set", not "keep tempo".
+  **Honest limit:** WebAudio is suspended when the app is backgrounded, so the
+  end sound is reliable only when the logger is foreground (screen may be off
+  under the wake lock). Reported plainly; the notification is the background
+  affordance.
+- **Stale-draft prompt (item 7).** `SessionBar` now shows the draft age, and a
+  draft older than 24h flips to a warning treatment ("Discard this old
+  session?") with a one-tap discard (clears the local draft only; no DB rows
+  touched) and a Resume option, so stale state can't pass for live.
+
+---
+
 # Package M — logger correctness bug fixes
 
 - **Entry replaces, never appends (fix 1).** Tapping into a keypad cell arms

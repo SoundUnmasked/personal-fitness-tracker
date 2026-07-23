@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
+import { fmtClock } from '@/lib/format';
+import { parseTempoRegions } from '@/lib/tempo';
+import NoteText from '@/components/NoteText';
 import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
@@ -72,10 +75,66 @@ function vibrate(pattern: number | number[]): void {
 // Fix 1: focusing a native numeric input selects its content, so the first
 // keystroke replaces the old value instead of appending to it.
 const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => { try { e.currentTarget.select(); } catch { /* ignore */ } };
-// Strict metronome: every tick is identical (item 1). No vibration in the loop.
+// Strict metronome: every tempo tick is one identical flat blip.
 const TICK_FREQ = 880, TICK_DUR = 0.045, TICK_PEAK = 0.2;
-// Rest end-warning tones (item 2a): distinct at T-3 and at zero.
-const REST_WARN_FREQ = 660, REST_END_FREQ = 990;
+// Package P: region-based tempo cues. Each region has its OWN pitch so the
+// lifter can follow tempo by ear — lower for the descent, higher for the lift —
+// rather than a flat beat. Distinct from the rest-end chime (item 6).
+const TEMPO_REGION_FREQ: Record<string, number> = { ecc: 392, bottom: 330, con: 587, top: 494 };
+function playRegionCue(key: string): void { playTone(TEMPO_REGION_FREQ[key] ?? 440, 0.12, 0.26); }
+function playTempoSubTick(): void { playTone(880, 0.03, 0.1); } // soft interior second
+function playExplode(): void { playTone(784, 0.16, 0.32); }    // explosive concentric accent
+// A clear rising two-note "starting now" cue at the end of the setup delay —
+// its own pitch pair (523 -> 784), unlike rest-end (660 -> 990).
+function playStartingNow(): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime;
+  const note = (freq: number, at: number, dur: number, peak = 0.3) => {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.value = freq;
+      o.connect(g); g.connect(ctx.destination);
+      const t = t0 + at;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur + 0.02);
+      o.onended = () => { try { o.disconnect(); g.disconnect(); } catch { /* gone */ } };
+    } catch { /* audio unavailable */ }
+  };
+  note(523, 0, 0.14); note(784, 0.13, 0.3);
+}
+// Rest countdown blip (T-3/T-2/T-1): a short, low, same-pitch tick each second.
+const REST_COUNT_FREQ = 620;
+// Package N item 6: the rest-END cue must be clearly DIFFERENT from the tempo
+// tick — it means "start your set", not "keep to tempo". A rising two-note
+// chime (root -> a fifth above), which no single flat metronome blip resembles.
+function playRestEndChime(): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime;
+  const note = (freq: number, at: number, dur: number, peak = 0.3) => {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle'; // warmer than the metronome's default sine — extra separation
+      o.frequency.value = freq;
+      o.connect(g); g.connect(ctx.destination);
+      const t = t0 + at;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur + 0.02);
+      o.onended = () => { try { o.disconnect(); g.disconnect(); } catch { /* gone */ } };
+    } catch { /* audio unavailable */ }
+  };
+  note(660, 0, 0.16);      // root
+  note(990, 0.14, 0.32);   // a fifth up, held longer — unmistakably a chime
+}
 
 export interface LogExercise {
   name: string;
@@ -89,6 +148,20 @@ export interface LogExercise {
   superset: string | null;
   prevKg: number | null;
   prevReps: number | null;
+  planNote: string | null;   // Package O: the plan note (coach cue)
+  loggedNote: string | null; // Package O: note logged last time this plan was completed
+  prevWarmups: { weightKg: number | null; reps: number | null }[]; // Package O: warm-up memory
+}
+// Package R fix 1: recorded actuals for a COMPLETED session, aligned to
+// `exercises` by index, so re-opening the logger hydrates from the DB.
+export interface CompletedRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; warmup: boolean; }
+export interface CompletedActuals {
+  durationMin: number | null;
+  rpeOverall: number | null;
+  energyPre: number | null;
+  sessionNote: string;
+  totalSets: number;        // existing recorded strength_sets count (fix 2 guard)
+  exercises: CompletedRow[][];
 }
 export interface LogPlan {
   id: number;
@@ -101,9 +174,10 @@ export interface LogPlan {
   cooldown: FlowItem[];      // structured cool-down items
   cooldownText: string | null;
   exercises: LogExercise[];
+  completed?: CompletedActuals | null; // present only when editing a completed session
 }
 
-interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; }
+interface SetRow { kg: string; reps: string; dur: string; rpe: string; rpeHi: string; done: boolean; prevKg: string; prevReps: string; warmup: boolean; suggested?: boolean; }
 type Field = 'kg' | 'reps' | 'rpe' | 'dur';
 
 function initSets(ex: LogExercise): SetRow[] {
@@ -113,9 +187,35 @@ function initSets(ex: LogExercise): SetRow[] {
   const dur = ex.setStyle === 'duration' && ex.durationSeconds != null ? String(ex.durationSeconds) : '';
   const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
   const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
-  return Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', rpeHi: '', done: false, prevKg, prevReps, warmup: false }));
+  const working: SetRow[] = Array.from({ length: n }, () => ({ kg, reps, dur, rpe: '', rpeHi: '', done: false, prevKg, prevReps, warmup: false }));
+  // Package O: warm-up memory — prepend the same NUMBER of warm-up sets this
+  // movement had last time, pre-filled with those weights/reps and flagged as a
+  // suggestion (never auto-applied to an exercise with no history).
+  const suggestedWarmups: SetRow[] = (ex.prevWarmups ?? []).map((w) => ({
+    kg: w.weightKg != null ? String(w.weightKg) : '',
+    reps: w.reps != null ? String(w.reps) : '',
+    dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup: true, suggested: true,
+  }));
+  return [...suggestedWarmups, ...working];
 }
 const emptyRow = (warmup = false): SetRow => ({ kg: '', reps: '', dur: '', rpe: '', rpeHi: '', done: false, prevKg: '', prevReps: '', warmup });
+// Package R fix 1: build the grid from a completed session's saved actuals,
+// aligned by exercise index, with every saved set pre-TICKED so the editor
+// opens on exactly what was recorded. Exercises with no saved rows fall back to
+// their plan rows (unticked) so they can still be logged during the edit.
+function completedToSets(plan: LogPlan): SetRow[][] {
+  const c = plan.completed;
+  if (!c) return plan.exercises.map(initSets);
+  return plan.exercises.map((ex, ei) => {
+    const prevKg = ex.prevKg != null ? String(ex.prevKg) : '';
+    const prevReps = ex.prevReps != null ? String(ex.prevReps) : '';
+    const rows = (c.exercises[ei] ?? []).map((r) => ({
+      kg: r.kg, reps: r.reps, dur: r.dur, rpe: r.rpe, rpeHi: r.rpeHi,
+      done: true, prevKg, prevReps, warmup: r.warmup, suggested: false,
+    }));
+    return rows.length ? rows : initSets(ex);
+  });
+}
 /** RPE cell text: half-points as typed; ranges as "7-8" (fix 4). */
 const rpeDisplay = (st: Pick<SetRow, 'rpe' | 'rpeHi'>): string =>
   st.rpe === '' ? '' : st.rpeHi ? `${st.rpe}-${st.rpeHi}` : st.rpe;
@@ -144,7 +244,10 @@ const fieldsForStyle = (style: 'reps' | 'duration', showKg: boolean): Field[] =>
 export default function LogGrid({ plan }: { plan: LogPlan }) {
   const router = useRouter();
 
-  const [sets, setSets] = useState<SetRow[][]>(() => plan.exercises.map(initSets));
+  // Fix 1: a completed session opens on its saved actuals (pre-ticked); a
+  // planned session opens on plan targets. A local draft (in-progress) still
+  // overrides both, hydrated in the effect below.
+  const [sets, setSets] = useState<SetRow[][]>(() => plan.completed ? completedToSets(plan) : plan.exercises.map(initSets));
   const [active, setActive] = useState<{ ei: number; si: number; field: Field }>({ ei: 0, si: 0, field: 'kg' });
   // Item 3: no keypad on open — the panel starts hidden and only reveals the
   // keypad once the user taps a cell (tap() sets it to 'entry').
@@ -157,13 +260,25 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const [warmup, setWarmup] = useState<FlowItem[]>(() => plan.warmup.map((i) => ({ ...i })));
   const [cooldown, setCooldown] = useState<FlowItem[]>(() => plan.cooldown.map((i) => ({ ...i })));
   const [notifyAsk, setNotifyAsk] = useState(false);
+  // Package O: per-exercise logged notes (pre-filled from last time's note, or
+  // the plan note) and a session-level note. Editable mid-session via the note
+  // sheet; persisted in the draft and sent on Finish.
+  const [exNotes, setExNotes] = useState<string[]>(() => plan.exercises.map((e) => e.loggedNote ?? e.planNote ?? ''));
+  const [sessionNote, setSessionNote] = useState(plan.completed?.sessionNote ?? '');
+  const [noteTarget, setNoteTarget] = useState<number | 'session' | null>(null); // open note editor
 
   const restFor = (ei: number) => plan.exercises[ei]?.restSeconds ?? DEFAULT_REST_SECONDS;
-  const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s }; });
-  const [elapsed, setElapsed] = useState(0);
+  // Rest timer has two modes (item 4): 'down' = countdown to restEndAt; 'up' =
+  // open-ended count-up stopwatch for unstructured work. `up` holds the count.
+  const [rest, setRest] = useState(() => { const s = plan.exercises[0]?.restSeconds ?? DEFAULT_REST_SECONDS; return { running: false, remaining: s, total: s, mode: 'down' as 'down' | 'up', up: 0 }; });
+  const [restEditing, setRestEditing] = useState(false); // typing an exact rest (item 3)
+  // Editing a completed session starts the clock at its recorded duration so a
+  // re-save preserves it (fix 1).
+  const [elapsed, setElapsed] = useState(plan.completed?.durationMin != null ? plan.completed.durationMin * 60 : 0);
   const [finishing, setFinishing] = useState(false);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const restWasRunning = useRef(false);
+  const restUpStart = useRef(0); // epoch ms anchor for the count-up mode
   // Item 6: wall-clock anchors so timers survive the JS loop being throttled or
   // suspended when the tab is backgrounded. The session clock is derived from
   // (base seconds + real time since an anchor); the rest timer counts down to an
@@ -203,6 +318,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const pausedRef = useRef(paused); useEffect(() => { pausedRef.current = paused; }, [paused]);
   const warmupRef = useRef(warmup); useEffect(() => { warmupRef.current = warmup; }, [warmup]);
   const cooldownRef = useRef(cooldown); useEffect(() => { cooldownRef.current = cooldown; }, [cooldown]);
+  const exNotesRef = useRef(exNotes); useEffect(() => { exNotesRef.current = exNotes; }, [exNotes]);
+  const sessionNoteRef = useRef(sessionNote); useEffect(() => { sessionNoteRef.current = sessionNote; }, [sessionNote]);
   const clearedRef = useRef(false); // set once the draft is intentionally cleared (finish)
   // Disposition for the NEXT nav-away save: null → default (implicitly pause),
   // false → keep running (item 3 "Keep session running"). Reset after each use.
@@ -219,6 +336,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     elapsed: elapsedRef.current,
     paused: overridePaused ?? pausedRef.current,
     updatedAt: Date.now(),
+    exNotes: exNotesRef.current,
+    sessionNote: sessionNoteRef.current,
   }), [plan.id, plan.title]);
 
   // Every set mutation saves the full draft synchronously.
@@ -234,8 +353,17 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     requestPersistentStorage();
     const d = readSessionDraft(plan.id);
     if (d && Array.isArray(d.sets) && d.sets.length) {
-      setSets(d.sets.map((rows) => rows.map((r) => ({ ...emptyRow(), ...r }))));
-      if (d.active) setActive(d.active);
+      // Package Q: reconcile the draft against the CURRENT plan (it may have
+      // been edited mid-session — movements added/removed/reordered). Map over
+      // the plan's exercises: keep the draft's rows where they exist, and give a
+      // newly-added movement its fresh initial rows. Extra draft columns (a
+      // removed movement) fall away because we iterate the plan, not the draft.
+      const base = plan.exercises.map(initSets);
+      setSets(base.map((rows, i) => {
+        const dr = d.sets[i];
+        return Array.isArray(dr) && dr.length ? dr.map((r) => ({ ...emptyRow(), ...r })) : rows;
+      }));
+      if (d.active) setActive({ ...d.active, ei: Math.min(d.active.ei, plan.exercises.length - 1) });
       if (typeof d.elapsed === 'number') {
         // Restore the session clock AND re-anchor its wall-clock base
         // synchronously. The ticking effect captured base=0 from elapsedRef
@@ -255,6 +383,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       }
       if (Array.isArray(d.warmup)) setWarmup(d.warmup);
       if (Array.isArray(d.cooldown)) setCooldown(d.cooldown);
+      if (Array.isArray(d.exNotes)) setExNotes((prev) => prev.map((n, i) => d.exNotes?.[i] ?? n));
+      if (typeof d.sessionNote === 'string') setSessionNote(d.sessionNote);
       // Auto-resume (never open into a paused interstitial). Only flash the
       // "Resumed" confirmation when the draft had been implicitly paused
       // (backed-out / "save & come back") — item 4b.
@@ -346,6 +476,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       setElapsed(c.base + Math.floor((Date.now() - c.since) / 1000));
       setRest((r) => {
         if (!r.running) return r;
+        if (r.mode === 'up') return { ...r, up: Math.max(0, Math.floor((Date.now() - restUpStart.current) / 1000)) };
         const rem = Math.max(0, Math.ceil((restEndAt.current - Date.now()) / 1000));
         if (rem <= 0) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); return { ...r, remaining: 0, running: false }; }
         return { ...r, remaining: rem };
@@ -375,12 +506,35 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }, []);
   useEffect(() => { if (panel === 'tempo' && !activeHasTempo) setPanel('entry'); }, [active.ei, activeHasTempo, panel]);
 
-  const mmss = (s: number) => `${Math.floor(s / 60)}:${String(Math.max(0, s % 60)).padStart(2, '0')}`;
+  // Item 5: one time format everywhere.
+  const mmss = fmtClock;
 
-  // --- rest-end notifications (item 2b) -------------------------------------
-  const restNotifyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // --- ongoing rest notification (item 1) -----------------------------------
+  // While a rest countdown runs we show ONE ongoing (persistent) notification
+  // carrying the rest END TIME, so it stays useful even when the JS timer is
+  // throttled in the background (a live countdown would freeze; an absolute end
+  // time does not). It is auto-closed when rest completes/skips — we never fire
+  // a separate "rest over" notification.
+  function showRestNotification(endAtMs: number) {
+    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+    if (!('serviceWorker' in navigator)) return;
+    const ends = new Date(endAtMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    // `renotify`/`requireInteraction` are valid at runtime but missing from the
+    // DOM lib's NotificationOptions, so widen the type here.
+    const opts: NotificationOptions = {
+      body: `Rest ends ${ends}`,
+      tag: 'pft-rest',       // one notification, replaced not stacked
+      silent: true,          // the audible cue is the in-app chime, not this
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      renotify: false,
+      requireInteraction: true, // keep it up (best-effort) until we close it
+    } as NotificationOptions & { renotify?: boolean; requireInteraction?: boolean };
+    navigator.serviceWorker.ready.then((reg) => {
+      reg.showNotification('Resting between sets', opts).catch(() => {});
+    }).catch(() => {});
+  }
   function cancelRestNotification() {
-    if (restNotifyTimer.current) { clearTimeout(restNotifyTimer.current); restNotifyTimer.current = null; }
     try {
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker.ready
@@ -388,25 +542,6 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           .catch(() => {});
       }
     } catch { /* ignore */ }
-  }
-  function scheduleRestNotification(seconds: number) {
-    if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
-    cancelRestNotification();
-    const title = 'Rest complete';
-    const opts = { body: 'Time for your next set.', tag: 'pft-rest', icon: '/icons/icon-192.png' };
-    // Prefer an OS-scheduled trigger (fires even if the app is backgrounded/
-    // closed) where supported; otherwise a setTimeout (foreground / wake-locked).
-    const hasTrigger = 'TimestampTrigger' in window && 'serviceWorker' in navigator;
-    if (hasTrigger) {
-      navigator.serviceWorker.ready.then((reg) => {
-        try {
-          // @ts-expect-error — Notification Triggers is experimental
-          reg.showNotification(title, { ...opts, showTrigger: new window.TimestampTrigger(Date.now() + seconds * 1000) }).catch(() => {});
-        } catch { /* fall through to timeout below */ }
-      }).catch(() => {});
-    } else {
-      restNotifyTimer.current = setTimeout(() => { try { new Notification(title, opts); } catch { /* ignore */ } }, seconds * 1000);
-    }
   }
   // Ask for permission gracefully (once) the first time a rest starts.
   function maybeAskNotify() {
@@ -422,7 +557,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     try { localStorage.setItem(NOTIFY_ASKED, '1'); } catch { /* ignore */ }
     if ('Notification' in window) {
       Notification.requestPermission().then((perm) => {
-        if (perm === 'granted' && rest.running && rest.remaining > 0) scheduleRestNotification(rest.remaining);
+        if (perm === 'granted' && rest.running && rest.mode === 'down' && rest.remaining > 0) showRestNotification(restEndAt.current);
       }).catch(() => {});
     }
   }
@@ -440,40 +575,84 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     restTimer.current = setInterval(() => {
       const rem = Math.max(0, Math.ceil((restEndAt.current - Date.now()) / 1000));
       setRest((r) => {
+        if (r.mode !== 'down') return r;
         if (rem === r.remaining) return r;
-        if (rem === 3 && r.remaining > 3) { playTone(REST_WARN_FREQ, 0.12, 0.22); vibrate(35); } // T-3 warning
+        // Item 6: audible 3-2-1 countdown — one blip per second for the last 3.
+        if (rem > 0 && rem <= 3 && rem < r.remaining) { playTone(REST_COUNT_FREQ, 0.07, 0.18); vibrate(25); }
         if (rem <= 0) {
           if (restTimer.current) clearInterval(restTimer.current);
-          if (r.remaining > 0) { playTone(REST_END_FREQ, 0.34, 0.3); vibrate([80, 40, 80]); } // distinct final beep
+          if (r.remaining > 0) { playRestEndChime(); vibrate([90, 50, 90]); } // distinct end chime
           cancelRestNotification();
           return { ...r, remaining: 0, running: false };
         }
         return { ...r, remaining: rem };
       });
-    }, 250);
+    }, 200);
+  }
+  // Count-up mode (item 4): a plain stopwatch, wall-clock anchored so it survives
+  // background throttling. Open-ended; the user reads and adjusts afterwards.
+  function runRestUpInterval() {
+    if (restTimer.current) clearInterval(restTimer.current);
+    restTimer.current = setInterval(() => {
+      const up = Math.max(0, Math.floor((Date.now() - restUpStart.current) / 1000));
+      setRest((r) => (r.mode === 'up' && r.running && up !== r.up ? { ...r, up } : r));
+    }, 200);
   }
   function startRest(sec: number) {
     setPanel('rest');
     restEndAt.current = Date.now() + sec * 1000;
-    setRest({ running: true, remaining: sec, total: sec });
+    setRest((r) => ({ ...r, running: true, remaining: sec, total: sec, mode: 'down' }));
     runRestInterval();
     maybeAskNotify();
-    scheduleRestNotification(sec);
+    showRestNotification(restEndAt.current);
   }
   function restAdjust(d: number) {
     setRest((r) => {
+      if (r.mode !== 'down') return r;
       const remaining = Math.max(0, r.remaining + d);
       const next = { ...r, remaining, total: Math.max(r.total, remaining) };
-      if (next.running) { restEndAt.current = Date.now() + remaining * 1000; scheduleRestNotification(remaining); }
+      if (next.running) { restEndAt.current = Date.now() + remaining * 1000; showRestNotification(restEndAt.current); }
+      return next;
+    });
+  }
+  // Item 3: set an exact rest duration by typing (seconds). Restarts the
+  // countdown from the typed value when a rest is running.
+  function setRestSeconds(sec: number) {
+    const s = Math.max(0, Math.round(sec));
+    setRest((r) => {
+      const next = { ...r, mode: 'down' as const, remaining: s, total: Math.max(s, 1) };
+      if (r.running && r.mode === 'down') {
+        restEndAt.current = Date.now() + s * 1000;
+        showRestNotification(restEndAt.current);
+      }
       return next;
     });
   }
   function restToggle() {
     unlockAudio();
+    if (rest.mode === 'up') {
+      if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); setRest((r) => ({ ...r, running: false })); }
+      else { restUpStart.current = Date.now() - rest.up * 1000; setRest((r) => ({ ...r, running: true })); runRestUpInterval(); }
+      return;
+    }
     if (rest.running) { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); }
-    else { const sec = rest.remaining > 0 ? rest.remaining : restFor(active.ei); restEndAt.current = Date.now() + sec * 1000; setRest((r) => ({ ...r, running: true, remaining: sec, total: Math.max(r.total, sec) })); runRestInterval(); maybeAskNotify(); scheduleRestNotification(sec); }
+    else { const sec = rest.remaining > 0 ? rest.remaining : restFor(active.ei); restEndAt.current = Date.now() + sec * 1000; setRest((r) => ({ ...r, running: true, remaining: sec, total: Math.max(r.total, sec) })); runRestInterval(); maybeAskNotify(); showRestNotification(restEndAt.current); }
   }
-  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
+  // Switch between countdown and count-up. Stops the clock on switch; the user
+  // presses start for the new mode.
+  function setRestMode(mode: 'down' | 'up') {
+    if (restTimer.current) clearInterval(restTimer.current);
+    cancelRestNotification();
+    setRestEditing(false);
+    if (mode === 'up') {
+      restUpStart.current = Date.now();
+      setRest((r) => ({ ...r, mode: 'up', running: false, up: 0 }));
+    } else {
+      const sec = restFor(active.ei);
+      setRest((r) => ({ ...r, mode: 'down', running: false, remaining: sec, total: sec }));
+    }
+  }
+  function restSkip() { if (restTimer.current) clearInterval(restTimer.current); cancelRestNotification(); setRestEditing(false); setRest((r) => ({ ...r, running: false })); setPanel('entry'); }
 
   // --- pause / resume (single-tap toggle in the header, L1) ------------------
   function pauseSession() {
@@ -487,7 +666,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
   function resumeSession() {
     setPaused(false);
-    if (restWasRunning.current) { restEndAt.current = Date.now() + rest.remaining * 1000; setRest((r) => ({ ...r, running: true })); runRestInterval(); }
+    if (restWasRunning.current) {
+      if (rest.mode === 'up') { restUpStart.current = Date.now() - rest.up * 1000; setRest((r) => ({ ...r, running: true })); runRestUpInterval(); }
+      else { restEndAt.current = Date.now() + rest.remaining * 1000; setRest((r) => ({ ...r, running: true })); runRestInterval(); showRestNotification(restEndAt.current); }
+    }
     if (swWasRunning.current) { setSw((s) => ({ ...s, running: true })); runSwInterval(); }
     saveSessionDraft(buildDraft(undefined, false));
   }
@@ -498,7 +680,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     swTimer.current = setInterval(() => { swElapsed.current += 1; setSw({ running: true, elapsed: swElapsed.current }); }, 1000);
   }
   function writeField(ei: number, si: number, field: Field, value: string) {
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value } : row)));
+    // Editing a suggested warm-up commits it (no longer a mere suggestion).
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((row, s) => s === si ? { ...row, [field]: value, suggested: false } : row)));
   }
   function durToggle() {
     if (sw.running) {
@@ -535,7 +718,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       else if (v === '.') cur = cur.includes('.') ? cur : (cur === '' ? '0.' : cur + '.');
       else if (cur.replace('.', '').length < 4) cur = cur + v;
       // Editing the RPE value abandons any "7 or 8" range (fix 4).
-      const patch: Partial<SetRow> = { [active.field]: cur };
+      const patch: Partial<SetRow> = { [active.field]: cur, suggested: false };
       if (active.field === 'rpe') patch.rpeHi = '';
       return { ...row, ...patch };
     })));
@@ -557,7 +740,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // could skip the rest-timer auto-start (issue 8).
     const row = sets[ei]?.[si];
     const nowDone = !(row?.done ?? false);
-    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone } : r)));
+    // Ticking a suggested warm-up commits it.
+    updateSets((all) => all.map((rows, e) => e !== ei ? rows : rows.map((r, s) => s === si ? { ...r, done: nowDone, suggested: false } : r)));
     // Ticking a set auto-starts THIS exercise's rest timer — but NEVER resets
     // one that is already counting (fix 2), and warm-up rows don't start rest
     // at all (fix 7).
@@ -623,6 +807,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const patchCooldown = useCallback((i: number, patch: Partial<FlowItem>) => {
     setCooldown((prev) => { const next = prev.map((it, idx) => idx === i ? { ...it, ...patch } : it); cooldownRef.current = next; saveSessionDraft(buildDraft()); return next; });
   }, [buildDraft]);
+  // Package O: note editing (per-exercise + session), persisted to the draft.
+  const setExNote = useCallback((ei: number, text: string) => {
+    setExNotes((prev) => { const next = prev.map((n, i) => i === ei ? text : n); exNotesRef.current = next; saveSessionDraft(buildDraft()); return next; });
+  }, [buildDraft]);
+  const setSessionNoteSaved = useCallback((text: string) => {
+    setSessionNote(text); sessionNoteRef.current = text; saveSessionDraft(buildDraft());
+  }, [buildDraft]);
 
   function deleteSet(ei: number, si: number) {
     const preLen = sets[ei]?.length ?? 0;
@@ -686,6 +877,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const nextField: Field | null =
     activeFieldIdx > -1 && activeFieldIdx < activeOrder.length - 1 ? activeOrder[activeFieldIdx + 1] : null;
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
+  // Package P: the tempo block's superset siblings — the movements in the active
+  // exercise's superset that carry a tempo, so it can offer tabs to alternate.
+  const tempoMembers = useMemo(() => {
+    const g = groups.find((grp) => grp.items.some((it) => it.index === active.ei));
+    if (!g || g.items.length < 2) return [] as { ei: number; name: string; tempo: string }[];
+    return g.items.filter((it) => it.ex.tempo).map((it) => ({ ei: it.index, name: it.ex.name, tempo: it.ex.tempo as string }));
+  }, [groups, active.ei]);
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
   const activeRows = sets[active.ei] ?? [];
@@ -696,11 +894,32 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     : `SET ${workingNo(activeRows, active.si)} OF ${workingCount(activeRows)}`;
 
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
+  // Item 2: the rest timer is "live" (worth an always-visible strip) whenever a
+  // countdown is running OR the count-up stopwatch is running.
+  const restLive = rest.running && (rest.mode === 'down' ? rest.remaining > 0 : true);
+  const restStripText = rest.mode === 'up' ? mmss(rest.up) : mmss(rest.remaining);
 
   return (
     <>
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4 }}>
+      {/* Item 2: always-visible rest strip. Fixed to the top so the remaining
+          rest time stays on screen while the keypad is open, while tapping other
+          sets, and while the page is scrolled. Tapping it opens the rest panel. */}
+      {restLive && (
+        <button
+          onClick={() => { setPanel('rest'); }}
+          aria-label={`Rest ${restStripText}. Open rest timer.`}
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 46, maxWidth: 460, margin: '0 auto', height: 'calc(38px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', border: 'none', cursor: 'pointer', background: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--accent)' : 'var(--accent-soft)', color: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--on-accent)' : 'var(--accent)', borderBottom: '1px solid var(--accent-line)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
+        >
+          <span className="msr-fill" style={{ fontSize: 17 }} aria-hidden="true">{rest.mode === 'up' ? 'timer' : 'hourglass_bottom'}</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>{rest.mode === 'up' ? 'TIMING' : 'REST'}</span>
+          <span style={{ fontSize: 17, fontWeight: 800, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' }}>{restStripText}</span>
+          <span className="msr" style={{ fontSize: 18, opacity: 0.7 }} aria-hidden="true">expand_more</span>
+        </button>
+      )}
+
+      {/* Header (offset down while the fixed rest strip is showing so its
+          buttons are never covered at scroll-top). */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4, marginTop: restLive ? 40 : 0 }}>
         <button className="icon-btn" onClick={() => setExitOpen(true)} aria-label="Back out of session"><span className="msr" aria-hidden="true">chevron_left</span></button>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
           <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
@@ -765,18 +984,36 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                         <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
                           {style === 'duration'
-                            ? `${ex.targetSets ?? '·'} × ${ex.durationSeconds != null ? `${ex.durationSeconds}s` : 'timed'} target`
+                            ? `${ex.targetSets ?? '·'} × ${ex.durationSeconds != null ? mmss(ex.durationSeconds) : 'timed'} target`
                             : `${ex.targetSets ?? '·'} × ${ex.targetReps ?? '·'} target`}
                         </div>
                       </div>
                     </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length && sets[index].length > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
+                      {/* Package O: one-tap per-exercise note. Filled state gets the accent. */}
+                      <button onClick={() => setNoteTarget(index)} aria-label={exNotes[index]?.trim() ? `Edit note for ${ex.name}` : `Add note for ${ex.name}`} style={{ width: 28, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '1px solid var(--border)', background: exNotes[index]?.trim() ? 'var(--accent-soft)' : 'var(--surface)', color: exNotes[index]?.trim() ? 'var(--accent)' : 'var(--text-dim)' }}>
+                        <span className="msr-fill" style={{ fontSize: 15 }} aria-hidden="true">{exNotes[index]?.trim() ? 'sticky_note_2' : 'note_add'}</span>
+                      </button>
                       <button onClick={() => setEditEx(editing ? null : index)} aria-label={editing ? 'Done editing sets' : 'Edit sets'} style={{ height: 26, padding: '0 9px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid var(--border)', background: editing ? 'var(--accent-soft)' : 'var(--surface)', color: editing ? 'var(--accent)' : 'var(--text-dim)' }}>
                         {editing ? 'Done' : 'Edit'}
                       </button>
                     </div>
                   </div>
+
+                  {/* Package O + R: inline note preview, truncated with an
+                      in-place "See full note" (fix 3); the pencil opens the editor. */}
+                  {exNotes[index]?.trim() && (
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: 9 }}>
+                      <span className="msr" style={{ fontSize: 14, color: 'var(--accent)', marginTop: 1 }} aria-hidden="true">sticky_note_2</span>
+                      <div style={{ flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 1.35, color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                        <NoteText text={exNotes[index]} max={110} />
+                      </div>
+                      <button onClick={() => setNoteTarget(index)} aria-label={`Edit note for ${ex.name}`} style={{ flex: 'none', background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-faint)', padding: 0 }}>
+                        <span className="msr" style={{ fontSize: 15 }} aria-hidden="true">edit</span>
+                      </button>
+                    </div>
+                  )}
 
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
                     <span style={pillStyle}><span className="msr" style={{ fontSize: 13 }} aria-hidden="true">timer</span>Rest {mmss(ex.restSeconds ?? DEFAULT_REST_SECONDS)}</span>
@@ -801,6 +1038,16 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '8px 2px' }}>No sets. Add one below.</div>
                   )}
 
+                  {/* Package O: warm-up memory banner — a suggestion, not a
+                      commitment. Dismiss removes the still-suggested rows. */}
+                  {sets[index].some((s) => s.suggested && !s.done) && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7, margin: '4px 0 2px', padding: '6px 9px', borderRadius: 9, background: 'var(--last-bg)', border: '1px dashed var(--border)' }}>
+                      <span className="msr" style={{ fontSize: 14, color: 'var(--text-faint)' }} aria-hidden="true">history</span>
+                      <span style={{ flex: 1, fontSize: 10.5, color: 'var(--text-faint)' }}>Warm-up suggested from last time · edit, tick or dismiss</span>
+                      <button onClick={() => updateSets((all) => all.map((rows, e) => e === index ? rows.filter((r) => !(r.suggested && !r.done)) : rows))} aria-label="Dismiss suggested warm-up" style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-dim)', background: 'transparent', border: 'none', cursor: 'pointer', padding: '2px 4px' }}>Dismiss</button>
+                    </div>
+                  )}
+
                   {sets[index].map((st, si) => {
                     const rowActive = activeHere && active.si === si;
                     const wNo = workingNo(sets[index], si);
@@ -810,7 +1057,10 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     <div key={si}
                       onTouchStart={(e) => rowTouchStart(e, index, si)}
                       onTouchEnd={rowTouchEnd}
-                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : 'none', transition: 'background 0.12s', touchAction: 'pan-y' }}>
+                      // Package O: a still-suggested warm-up (from last time) reads
+                      // as a suggestion — dashed outline, dimmed — until it's
+                      // ticked or edited, when it becomes a committed row.
+                      style={{ display: 'grid', gridTemplateColumns: cols, gap: 7, alignItems: 'center', marginTop: 8, padding: '4px 4px', marginLeft: -4, marginRight: -4, borderRadius: 12, background: rowActive ? 'var(--accent-tint)' : st.warmup ? 'var(--last-bg)' : 'transparent', boxShadow: rowActive ? 'inset 0 0 0 1px var(--accent-line)' : st.suggested ? 'inset 0 0 0 1px var(--border)' : 'none', opacity: st.suggested && !st.done ? 0.72 : 1, transition: 'background 0.12s, opacity 0.12s', touchAction: 'pan-y' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         {editing ? (
                           <button onClick={() => toggleRowWarmup(index, si)} aria-label={st.warmup ? `Make set ${wNo} a working set` : 'Mark as warm-up set'} aria-pressed={st.warmup} style={{ minWidth: 26, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: st.warmup ? 11 : 16, fontWeight: 800, letterSpacing: st.warmup ? '0.03em' : undefined, cursor: 'pointer', border: st.warmup ? '1px solid var(--accent-line)' : '1px dashed var(--border)', background: st.warmup ? 'var(--accent-soft)' : 'transparent', color: st.warmup ? 'var(--accent)' : 'var(--text-dim)' }}>
@@ -838,7 +1088,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       </div>
                       {showKg && <Cell active={rowActive && active.field === 'kg'} filled={st.kg !== ''} onClick={() => tap(index, si, 'kg')} value={st.kg} />}
                       {style === 'duration' ? (
-                        <Cell active={rowActive && active.field === 'dur'} filled={st.dur !== ''} onClick={() => tap(index, si, 'dur')} value={st.dur !== '' ? `${st.dur}s` : ''} />
+                        <Cell active={rowActive && active.field === 'dur'} filled={st.dur !== ''} onClick={() => tap(index, si, 'dur')} value={st.dur !== '' ? mmss(Number(st.dur) || 0) : ''} />
                       ) : (
                         <Cell active={rowActive && active.field === 'reps'} filled={st.reps !== ''} onClick={() => tap(index, si, 'reps')} value={st.reps} />
                       )}
@@ -886,6 +1136,19 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         {plan.cooldownText
           ? <FlowProse kind="cooldown" text={plan.cooldownText} />
           : cooldown.length > 0 && <WarmCoolList kind="cooldown" items={cooldown} onPatch={patchCooldown} />}
+
+        {/* Package O: session-level note, reachable mid-session (item 2). */}
+        <button
+          onClick={() => setNoteTarget('session')}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', textAlign: 'left', marginTop: 12, padding: '12px 14px', borderRadius: 14, background: 'var(--last-bg)', border: '1px solid var(--border)', cursor: 'pointer', color: 'var(--text)' }}
+        >
+          <span className="msr-fill" style={{ fontSize: 18, color: 'var(--accent)' }} aria-hidden="true">edit_note</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700 }}>Session note</div>
+            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sessionNote.trim() || 'Add a note for the whole session'}</div>
+          </div>
+          <span className="msr" style={{ fontSize: 18, color: 'var(--text-faint)' }} aria-hidden="true">chevron_right</span>
+        </button>
       </div>
 
       {/* Bottom entry panel */}
@@ -977,24 +1240,72 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
               </>
             ) : panel === 'rest' ? (
               <div style={{ padding: '2px 2px 4px' }}>
+                {/* Item 4: countdown vs open-ended count-up. */}
+                <div className="seg" style={{ marginBottom: 12 }}>
+                  <button className={`seg-item ${rest.mode === 'down' ? 'active' : ''}`} onClick={() => setRestMode('down')}><span className="msr">hourglass_bottom</span>Countdown</button>
+                  <button className={`seg-item ${rest.mode === 'up' ? 'active' : ''}`} onClick={() => setRestMode('up')}><span className="msr">timer</span>Count-up</button>
+                </div>
+
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>REST</div>
-                  <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, color: rest.remaining <= 3 && rest.running ? 'var(--accent)' : 'var(--text)' }}>{mmss(rest.remaining)}</div>
+                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{rest.mode === 'up' ? 'COUNT-UP' : 'REST'}</div>
+                  {rest.mode === 'down' && restEditing ? (
+                    <RestTimeInput
+                      initialSeconds={rest.remaining}
+                      onCommit={(sec) => { setRestSeconds(sec); setRestEditing(false); }}
+                      onCancel={() => setRestEditing(false)}
+                    />
+                  ) : (
+                    // Item 3: tap the time to type an exact rest duration.
+                    <button
+                      onClick={() => { if (rest.mode === 'down') setRestEditing(true); }}
+                      aria-label={rest.mode === 'down' ? 'Edit rest time' : undefined}
+                      style={{ background: 'transparent', border: 'none', padding: 0, cursor: rest.mode === 'down' ? 'text' : 'default', fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, fontVariantNumeric: 'tabular-nums', color: rest.mode === 'down' && rest.remaining <= 3 && rest.running ? 'var(--accent)' : 'var(--text)' }}
+                    >{rest.mode === 'up' ? mmss(rest.up) : mmss(rest.remaining)}</button>
+                  )}
                 </div>
-                <div style={{ height: 6, borderRadius: 4, background: 'var(--seg-track)', margin: '14px 0 16px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${restPct}%`, background: 'var(--accent)', borderRadius: 4, transition: 'width 0.9s linear' }} />
-                </div>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => restAdjust(-15)} style={restSmBtn}>−15s</button>
-                  <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Skip rest</button>
-                  <button onClick={() => restAdjust(15)} style={restSmBtn}>+15s</button>
-                </div>
+
+                {rest.mode === 'down' && (
+                  <div style={{ height: 6, borderRadius: 4, background: 'var(--seg-track)', margin: '14px 0 16px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${restPct}%`, background: 'var(--accent)', borderRadius: 4, transition: 'width 0.9s linear' }} />
+                  </div>
+                )}
+
+                {rest.mode === 'down' ? (
+                  <>
+                    <div style={{ display: 'flex', gap: 8, marginTop: rest.mode === 'down' ? 0 : 14 }}>
+                      <button onClick={() => restAdjust(-15)} style={restSmBtn}>-15s</button>
+                      <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Skip rest</button>
+                      <button onClick={() => restAdjust(15)} style={restSmBtn}>+15s</button>
+                    </div>
+                    {/* Quick presets — thumb-friendly typing shortcut (item 3). */}
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      {[60, 90, 120, 180].map((s) => (
+                        <button key={s} onClick={() => setRestSeconds(s)} style={{ ...restSmBtn, height: 38, fontSize: 12.5, background: rest.remaining === s ? 'var(--accent-soft)' : 'var(--surface)', color: rest.remaining === s ? 'var(--accent)' : 'var(--text)', border: rest.remaining === s ? '1px solid var(--accent-line)' : '1px solid var(--border)' }}>{mmss(s)}</button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+                    <button onClick={() => { restUpStart.current = Date.now(); setRest((r) => ({ ...r, up: 0, running: r.running })); }} style={restSmBtn}>Reset</button>
+                    <button onClick={restSkip} style={{ ...restSmBtn, flex: 1.6, background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid var(--accent-line)' }}>Done</button>
+                  </div>
+                )}
+
                 <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={restToggle}>
-                  <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : 'Start rest'}
+                  <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : rest.mode === 'up' ? 'Start count-up' : 'Start rest'}
                 </button>
               </div>
             ) : (
-              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} frozen={paused} /> : null
+              activeEx?.tempo ? (
+                <TempoBlock
+                  tempo={activeEx.tempo}
+                  exerciseName={activeEx.name}
+                  members={tempoMembers}
+                  activeEi={active.ei}
+                  onPick={(ei) => setActive((a) => ({ ...a, ei, si: Math.min(a.si, (sets[ei]?.length ?? 1) - 1) }))}
+                  frozen={paused}
+                />
+              ) : null
             )}
           </>
         )}
@@ -1012,12 +1323,25 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         />
       )}
 
+      {/* Package O: note editor (per-exercise or session). */}
+      {noteTarget !== null && (
+        <NoteSheet
+          title={noteTarget === 'session' ? 'Session note' : plan.exercises[noteTarget]?.name ?? 'Note'}
+          subtitle={noteTarget === 'session' ? 'Anything not specific to one movement' : 'e.g. felt heavy, form broke on set 3, cycled in'}
+          value={noteTarget === 'session' ? sessionNote : (exNotes[noteTarget] ?? '')}
+          onSave={(text) => { if (noteTarget === 'session') setSessionNoteSaved(text); else setExNote(noteTarget, text); setNoteTarget(null); }}
+          onClose={() => setNoteTarget(null)}
+        />
+      )}
+
       {finishing && (
         <FinishSheet
           plan={plan}
           sets={sets}
           warmup={warmup}
           cooldown={cooldown}
+          exNotes={exNotes}
+          sessionNote={sessionNote}
           doneCount={doneCount}
           totalCount={totalCount}
           elapsed={elapsed}
@@ -1044,6 +1368,71 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
 const restSmBtn: React.CSSProperties = { flex: 1, height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--surface)', color: 'var(--text)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer' };
 const pillStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, height: 26, padding: '0 9px', borderRadius: 999, fontSize: 11, fontWeight: 600, color: 'var(--text-dim)', background: 'var(--surface)', border: '1px solid var(--border)' };
+
+// Package O: lightweight note editor sheet (per-exercise or session).
+function NoteSheet({ title, subtitle, value, onSave, onClose }: {
+  title: string; subtitle: string; value: string; onSave: (text: string) => void; onClose: () => void;
+}) {
+  const [text, setText] = useState(value);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { ref.current?.focus(); }, []);
+  return (
+    <div role="dialog" aria-modal="true" style={{ position: 'fixed', inset: 0, zIndex: 78, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 460, background: 'var(--panel-bg)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', borderTopLeftRadius: 24, borderTopRightRadius: 24, borderTop: '1px solid var(--border)', padding: '18px 18px calc(20px + env(safe-area-inset-bottom))' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 4 }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="h2" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+            <div className="sub">{subtitle}</div>
+          </div>
+          <button className="icon-btn dim" onClick={onClose} aria-label="Close" style={{ width: 44, height: 44, flex: 'none' }}><span className="msr" aria-hidden="true">close</span></button>
+        </div>
+        <textarea
+          ref={ref}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Type a note…"
+          style={{ width: '100%', minHeight: 110, marginTop: 10, padding: '12px 13px', borderRadius: 13, border: '1px solid var(--border)', background: 'var(--surface)', color: 'var(--text)', fontSize: 15, lineHeight: 1.4, resize: 'vertical' }}
+        />
+        <button className="btn" style={{ height: 50, marginTop: 12, borderRadius: 14 }} onClick={() => onSave(text)}>
+          Save note<span className="msr-fill" style={{ fontSize: 20 }} aria-hidden="true">check</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Item 3: type an exact rest duration. Accepts "M:SS" or plain seconds; the
+// native numeric keyboard shows because inputMode is numeric.
+function parseClockInput(raw: string): number | null {
+  const s = raw.trim();
+  if (s === '') return null;
+  if (s.includes(':')) {
+    const [m, sec] = s.split(':');
+    const mm = Number(m || 0), ss = Number(sec || 0);
+    if (!Number.isFinite(mm) || !Number.isFinite(ss)) return null;
+    return Math.max(0, Math.round(mm * 60 + ss));
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : null;
+}
+function RestTimeInput({ initialSeconds, onCommit, onCancel }: { initialSeconds: number; onCommit: (sec: number) => void; onCancel: () => void }) {
+  const [val, setVal] = useState(fmtClock(initialSeconds));
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { const el = ref.current; if (el) { el.focus(); try { el.select(); } catch { /* ignore */ } } }, []);
+  const commit = () => { const sec = parseClockInput(val); if (sec == null) onCancel(); else onCommit(sec); };
+  return (
+    <input
+      ref={ref}
+      inputMode="numeric"
+      value={val}
+      onChange={(e) => setVal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') onCancel(); }}
+      aria-label="Rest time (minutes:seconds or seconds)"
+      style={{ width: 150, textAlign: 'right', background: 'transparent', border: 'none', borderBottom: '2px solid var(--accent)', color: 'var(--text)', fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1, fontVariantNumeric: 'tabular-nums', padding: 0 }}
+    />
+  );
+}
 
 function Cell({ active, filled, value, onClick }: { active: boolean; filled: boolean; value: string; onClick: () => void }) {
   const base: React.CSSProperties = { height: 42, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 11, fontSize: 16, fontWeight: 600, cursor: 'pointer' };
@@ -1218,117 +1607,199 @@ function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onS
   );
 }
 
-// --- Tempo metronome ---------------------------------------------------------
-interface TempoPhase { label: string; sec: number; }
-function parseTempo(tempo: string): TempoPhase[] {
-  const labels = ['Lower', 'Bottom', 'Raise', 'Top'];
-  const out: TempoPhase[] = [];
-  tempo.toUpperCase().slice(0, 4).split('').forEach((c, i) => {
-    const sec = c === 'X' ? 1 : Number(c);
-    if (!Number.isFinite(sec) || sec <= 0) return;
-    out.push({ label: c === 'X' && i === 2 ? 'Explode' : labels[i], sec });
-  });
-  return out;
-}
+// --- Region-based tempo engine (Package P) -----------------------------------
+// Parsing lives in lib/tempo.ts (pure + unit-tested); this component is the
+// audible/visual engine over it. Each region drives its OWN cue.
+const SETUP_PRESETS = [5, 10, 15];
+interface TempoDisp { ri: number; remaining: number; rep: number }
 
-interface TempoDisp { pi: number; remaining: number; rep: number }
-
-function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
-  const phases = useMemo(() => parseTempo(tempo), [tempo]);
-  const bounds = useMemo(() => { let acc = 0; return phases.map((p) => (acc += p.sec)); }, [phases]);
+function TempoBlock({ tempo, exerciseName, members, activeEi, onPick, frozen }: {
+  tempo: string;
+  exerciseName: string;
+  members: { ei: number; name: string; tempo: string }[]; // superset siblings with a tempo
+  activeEi: number;
+  onPick: (ei: number) => void;
+  frozen?: boolean;
+}) {
+  const regions = useMemo(() => parseTempoRegions(tempo), [tempo]);
+  const bounds = useMemo(() => { let acc = 0; return regions.map((r) => (acc += r.sec)); }, [regions]);
   const cycle = bounds.length ? bounds[bounds.length - 1] : 0;
 
-  const [running, setRunning] = useState(false);
-  const [disp, setDisp] = useState<TempoDisp>({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+  const [mode, setMode] = useState<'idle' | 'setup' | 'running'>('idle');
+  const [setupDelay, setSetupDelay] = useState(10); // configurable 5-15s (item 2)
+  const [setupLeft, setSetupLeft] = useState(0);
+  const [disp, setDisp] = useState<TempoDisp>({ ri: 0, remaining: regions[0]?.sec ?? 0, rep: 0 });
 
   const rafRef = useRef<number | null>(null);
+  const setupTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const setupEndRef = useRef(0);
   const startedAtRef = useRef(0);
   const accumRef = useRef(0);
   const lastSecondRef = useRef(-1);
+  const lastRegionRef = useRef(-1);
 
   const stopRaf = () => { if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } };
+  const stopSetup = () => { if (setupTimer.current) { clearInterval(setupTimer.current); setupTimer.current = null; } };
 
-  // Absolute-timestamp rAF engine (kept exactly as-is). Item 1: the metronome
-  // fires ONE IDENTICAL tick every whole second — same pitch, same volume, like
-  // a real metronome. No pitch change on phase boundaries. No vibration.
   const frame = useCallback(() => {
     if (!cycle) return;
     const elapsed = (accumRef.current + (performance.now() - startedAtRef.current)) / 1000;
     const rep = Math.floor(elapsed / cycle);
     const within = elapsed - rep * cycle;
-    let pi = 0;
-    while (pi < bounds.length - 1 && within >= bounds[pi]) pi++;
-    const remaining = Math.max(0, bounds[pi] - within);
+    let ri = 0;
+    while (ri < bounds.length - 1 && within >= bounds[ri]) ri++;
+    const remaining = Math.max(0, bounds[ri] - within);
 
-    const secondIndex = Math.floor(elapsed + 1e-6);
-    if (secondIndex !== lastSecondRef.current) {
-      lastSecondRef.current = secondIndex;
-      playTone(TICK_FREQ, TICK_DUR, TICK_PEAK); // identical every second
+    // Region entry → that region's distinct cue (or the explosive accent).
+    const globalRegion = rep * regions.length + ri;
+    if (globalRegion !== lastRegionRef.current) {
+      lastRegionRef.current = globalRegion;
+      lastSecondRef.current = Math.floor(elapsed + 1e-6); // don't also sub-tick this instant
+      const r = regions[ri];
+      if (r?.explosive) playExplode(); else if (r) playRegionCue(r.key);
+    } else {
+      // Interior whole-second → soft sub-tick (so a 3s region is felt, not silent).
+      const secondIndex = Math.floor(elapsed + 1e-6);
+      if (secondIndex !== lastSecondRef.current) { lastSecondRef.current = secondIndex; playTempoSubTick(); }
     }
 
     const remCeil = Math.max(0, Math.ceil(remaining - 1e-6));
-    setDisp((prev) => (prev.pi === pi && prev.rep === rep && prev.remaining === remCeil) ? prev : { pi, remaining: remCeil, rep });
+    setDisp((prev) => (prev.ri === ri && prev.rep === rep && prev.remaining === remCeil) ? prev : { ri, remaining: remCeil, rep });
     rafRef.current = requestAnimationFrame(frame);
-  }, [bounds, cycle]);
+  }, [bounds, cycle, regions]);
 
-  const start = useCallback(() => {
-    if (!phases.length) return;
-    unlockAudio();
-    startedAtRef.current = performance.now();
-    setRunning(true);
-    stopRaf();
-    rafRef.current = requestAnimationFrame(frame);
-  }, [frame, phases.length]);
-
-  const pause = useCallback(() => {
-    accumRef.current += performance.now() - startedAtRef.current;
-    stopRaf();
-    setRunning(false);
-  }, []);
-
-  const reset = useCallback(() => {
-    stopRaf();
-    setRunning(false);
+  const beginRunning = useCallback(() => {
     accumRef.current = 0;
     lastSecondRef.current = -1;
-    setDisp({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
-  }, [phases]);
+    lastRegionRef.current = -1;
+    startedAtRef.current = performance.now();
+    setMode('running');
+    stopRaf();
+    rafRef.current = requestAnimationFrame(frame);
+  }, [frame]);
 
+  // Setup delay countdown (item 2): visible number + soft ticks, then a clear
+  // "starting now" cue, then the tempo begins.
+  const runSetupInterval = useCallback(() => {
+    stopSetup();
+    setupTimer.current = setInterval(() => {
+      const left = Math.max(0, Math.ceil((setupEndRef.current - performance.now()) / 1000));
+      setSetupLeft((prev) => {
+        if (left !== prev && left > 0) { playTone(REST_COUNT_FREQ, 0.06, 0.16); vibrate(20); }
+        return left;
+      });
+      if (left <= 0) { stopSetup(); playStartingNow(); vibrate([60, 40, 60]); beginRunning(); }
+    }, 100);
+  }, [beginRunning]);
+
+  const start = useCallback(() => {
+    if (!regions.length) return;
+    unlockAudio();
+    if (setupDelay > 0) {
+      setMode('setup');
+      setSetupLeft(setupDelay);
+      setupEndRef.current = performance.now() + setupDelay * 1000;
+      runSetupInterval();
+    } else {
+      beginRunning();
+    }
+  }, [regions.length, setupDelay, runSetupInterval, beginRunning]);
+
+  const pause = useCallback(() => {
+    if (mode === 'setup') { stopSetup(); setMode('idle'); return; }
+    accumRef.current += performance.now() - startedAtRef.current;
+    stopRaf();
+    setMode('idle');
+  }, [mode]);
+
+  const reset = useCallback(() => {
+    stopRaf(); stopSetup();
+    setMode('idle');
+    accumRef.current = 0;
+    lastSecondRef.current = -1;
+    lastRegionRef.current = -1;
+    setDisp({ ri: 0, remaining: regions[0]?.sec ?? 0, rep: 0 });
+  }, [regions]);
+
+  // Auto-load: reset the engine whenever the loaded tempo changes (item 3 —
+  // switching exercises in a superset auto-loads the new prescription).
   useEffect(() => { reset(); }, [tempo, reset]);
-  useEffect(() => () => stopRaf(), []);
-  useEffect(() => { if (frozen && running) pause(); }, [frozen, running, pause]);
+  useEffect(() => () => { stopRaf(); stopSetup(); }, []);
+  useEffect(() => { if (frozen && mode !== 'idle') pause(); }, [frozen, mode, pause]);
 
-  if (!phases.length) {
-    return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
-  }
-  const st = disp;
-  const cur = phases[st.pi];
+  const running = mode === 'running';
 
   return (
     <div style={{ padding: '2px 2px 4px' }}>
+      {/* Superset awareness (item 3): tabs to flip between alternating movements,
+          each auto-loading its own tempo. */}
+      {members.length > 1 && (
+        <div className="seg" style={{ marginBottom: 10 }}>
+          {members.map((m) => (
+            <button key={m.ei} className={`seg-item ${m.ei === activeEi ? 'active' : ''}`} onClick={() => onPick(m.ei)}>
+              {m.name.length > 12 ? m.name.slice(0, 11) + '…' : m.name} · {m.tempo}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>TEMPO · {tempo}</div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Rep {st.rep + 1}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exerciseName.toUpperCase()} · TEMPO {tempo}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', flex: 'none' }}>Rep {disp.rep + 1}</div>
       </div>
-      <div style={{ textAlign: 'center', margin: '8px 0 12px' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? cur.label : 'Ready'}</div>
-        <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? st.remaining : phases[0].sec}</div>
-      </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {phases.map((p, i) => (
-          <div key={i} style={{ flex: p.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === st.pi ? 'var(--accent)' : 'var(--seg-track)', color: running && i === st.pi ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.label}</div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{p.sec}s</div>
+
+      {regions.length === 0 ? (
+        <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo &ldquo;{tempo}&rdquo; has no timed regions.</div>
+      ) : (
+        <>
+          <div style={{ textAlign: 'center', margin: '10px 0 12px' }}>
+            {mode === 'setup' ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.04em' }}>GET SET UP</div>
+                <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{setupLeft}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>Tempo starts at 0</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? regions[disp.ri]?.label : 'Ready'}</div>
+                <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? disp.remaining : regions[0].sec}</div>
+              </>
+            )}
           </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={reset} style={restSmBtn}>Reset</button>
-        <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={running ? pause : start}>
-          <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
-        </button>
-      </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Steady metronome: one tick every second</div>
+
+          {/* Region bar — proportional segments, current region highlighted. */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            {regions.map((r, i) => (
+              <div key={i} style={{ flex: r.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === disp.ri ? 'var(--accent)' : 'var(--seg-track)', color: running && i === disp.ri ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{r.explosive ? 'X' : r.sec}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Setup delay picker (item 2), shown while idle. */}
+          {mode === 'idle' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-faint)', flex: 'none' }}>Setup delay</span>
+              <div className="seg" style={{ flex: 1 }}>
+                {SETUP_PRESETS.map((s) => (
+                  <button key={s} className={`seg-item ${setupDelay === s ? 'active' : ''}`} onClick={() => setSetupDelay(s)}>{s}s</button>
+                ))}
+                <button className={`seg-item ${setupDelay === 0 ? 'active' : ''}`} onClick={() => setSetupDelay(0)}>Off</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={reset} style={restSmBtn}>Reset</button>
+            <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={mode === 'idle' ? start : pause}>
+              <span className="msr-fill" style={{ fontSize: 20 }}>{mode === 'idle' ? 'play_arrow' : 'pause'}</span>
+              {mode === 'idle' ? (setupDelay > 0 ? 'Start (with setup)' : 'Start tempo') : mode === 'setup' ? 'Cancel setup' : 'Pause'}
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Each region has its own cue · lower, pause, lift, hold</div>
+        </>
+      )}
     </div>
   );
 }
@@ -1367,11 +1838,13 @@ function exerciseLabel(groups: Group[], gi: number, pos: number): string {
 const OFFLINE_FINISH_MSG =
   'No signal. Your session is saved on this phone. Tap Finish again when you’re back online.';
 
-function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elapsed, onMarkAllDone, onClose, onSaved }: {
+function FinishSheet({ plan, sets, warmup, cooldown, exNotes, sessionNote, doneCount, totalCount, elapsed, onMarkAllDone, onClose, onSaved }: {
   plan: LogPlan;
   sets: SetRow[][];
   warmup: FlowItem[];
   cooldown: FlowItem[];
+  exNotes: string[];      // Package O: per-exercise logged notes (by index)
+  sessionNote: string;    // Package O: session-level note
   doneCount: number;
   totalCount: number;
   elapsed: number; // session seconds — saved as the session's duration
@@ -1379,9 +1852,11 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [rpeOverall, setRpe] = useState('');
-  const [energyPre, setEnergy] = useState('');
-  const [notes, setNotes] = useState('');
+  // Editing a completed session pre-fills its recorded RPE / energy (fix 1).
+  const [rpeOverall, setRpe] = useState(plan.completed?.rpeOverall != null ? String(plan.completed.rpeOverall) : '');
+  const [energyPre, setEnergy] = useState(plan.completed?.energyPre != null ? String(plan.completed.energyPre) : '');
+  // Session note flows through here (also editable mid-session); seed from it.
+  const [notes, setNotes] = useState(sessionNote);
   const [cooldownDone, setCooldown] = useState(false);
   const [distanceKm, setDistance] = useState('');
   const [avgHr, setAvgHr] = useState('');
@@ -1389,14 +1864,27 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
+  // Fix 2: pending destructive re-save awaiting explicit confirmation.
+  const [confirmRemoval, setConfirmRemoval] = useState<{ existing: number; next: number } | null>(null);
 
   const showCooldownPrompt = plan.needsCooldown && cooldown.length === 0 && !plan.cooldownText;
 
-  async function save() {
-    setSaving(true); setError(null);
+  async function save(confirmed = false) {
     // Data truth: ONLY ticked sets are saved. Rows pre-fill from targets, so a
     // value alone proves nothing — unticked rows are dropped (no ghost rows).
     const strengthSets = tickedStrengthSets(plan.exercises, sets);
+
+    // Fix 2: never silently destroy recorded history. If this is a re-save of a
+    // completed session and it would remove any existing recorded set (fewer
+    // sets than are on record, incl. dropping to zero), require an explicit
+    // confirmation that states plainly what will be removed.
+    const existing = plan.completed?.totalSets ?? 0;
+    if (!confirmed && existing > 0 && strengthSets.length < existing) {
+      setConfirmRemoval({ existing, next: strengthSets.length });
+      return;
+    }
+    setConfirmRemoval(null);
+    setSaving(true); setError(null);
     const run = plan.hasRun ? {
       distanceKm: distanceKm ? Number(distanceKm) : null,
       avgHr: avgHr ? Number(avgHr) : null,
@@ -1404,13 +1892,16 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
     } : null;
     let res;
     try {
+      // Package O: per-exercise notes keyed by planned-exercise order (= index).
+      const exerciseNotes: Record<number, string | null> = {};
+      exNotes.forEach((n, i) => { exerciseNotes[i] = n?.trim() ? n.trim() : null; });
       res = await completePlanAction(plan.id, {
         // Session clock → stored duration (whole minutes, ≥1 once started).
         durationMin: elapsed > 0 ? Math.max(1, Math.round(elapsed / 60)) : null,
         rpeOverall: rpeOverall ? Number(rpeOverall) : null,
         energyPre: energyPre ? Number(energyPre) : null,
         ...(showCooldownPrompt ? { cooldownDone } : {}),
-        warmup, cooldown,
+        warmup, cooldown, exerciseNotes,
         notes: notes || null, strengthSets, run,
       });
     } catch {
@@ -1501,9 +1992,30 @@ function FinishSheet({ plan, sets, warmup, cooldown, doneCount, totalCount, elap
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="How did it feel?" />
         </div>
 
-        <button className="btn btn-lg" onClick={save} disabled={saving}>
-          {saving ? <span className="spin" /> : <>Save &amp; complete<span className="msr-fill" style={{ fontSize: 20 }}>check</span></>}
-        </button>
+        {/* Fix 2: destructive re-save confirmation. Stated plainly, blocks the
+            save until the user explicitly confirms removing recorded history. */}
+        {confirmRemoval ? (
+          <div className="note note-err" style={{ display: 'block', marginBottom: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+              <span className="msr-fill" aria-hidden="true">warning</span>
+              <div style={{ fontSize: 13, lineHeight: 1.4 }}>
+                {confirmRemoval.next === 0
+                  ? `This will delete all ${confirmRemoval.existing} recorded set${confirmRemoval.existing === 1 ? '' : 's'} for this session. Nothing is ticked, so nothing will be saved in their place.`
+                  : `This will replace the ${confirmRemoval.existing} recorded set${confirmRemoval.existing === 1 ? '' : 's'} with ${confirmRemoval.next}, removing ${confirmRemoval.existing - confirmRemoval.next}. Recorded history can't be recovered.`}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+              <button className="btn-sm" onClick={() => setConfirmRemoval(null)} style={{ flex: 1, height: 46, background: 'var(--surface)', color: 'var(--text)', border: '1px solid var(--border)' }}>Cancel</button>
+              <button className="btn-sm" onClick={() => save(true)} disabled={saving} style={{ flex: 1.3, height: 46, background: 'var(--err-tint)', color: 'var(--err-text)', border: '1px solid var(--err-line)', fontWeight: 700 }}>
+                {saving ? <span className="spin" /> : (confirmRemoval.next === 0 ? 'Delete recorded sets' : 'Remove & save')}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button className="btn btn-lg" onClick={() => save()} disabled={saving}>
+            {saving ? <span className="spin" /> : <>Save &amp; complete<span className="msr-fill" style={{ fontSize: 20 }}>check</span></>}
+          </button>
+        )}
       </div>
     </div>
   );

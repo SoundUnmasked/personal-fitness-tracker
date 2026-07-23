@@ -38,6 +38,8 @@ const ADDITIVE_COLUMNS: Record<string, { name: string; type: string }[]> = {
     { name: 'set_style', type: 'TEXT' },
     { name: 'duration_seconds', type: 'INTEGER' },
     { name: 'tempo', type: 'TEXT' },
+    // Package O: per-exercise logged note (distinct from the plan note).
+    { name: 'logged_note', type: 'TEXT' },
   ],
   strength_sets: [
     { name: 'duration_seconds', type: 'INTEGER' },

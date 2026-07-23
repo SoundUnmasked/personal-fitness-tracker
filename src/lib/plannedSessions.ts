@@ -148,6 +148,50 @@ export async function createPlannedSession(
   });
 }
 
+/**
+ * Package Q: overwrite a PLANNED session's contents (movements + targets +
+ * warm-up + cool-down + title/type/notes) in one transaction. The date is left
+ * unchanged (rescheduling is a separate action). Planned exercises are replaced
+ * wholesale, which also applies add / remove / reorder — the input order IS the
+ * new order. Never touches a completed session's logged actuals.
+ */
+export async function updatePlannedSession(
+  prisma: PrismaClient,
+  id: number,
+  input: PlannedSessionInput,
+) {
+  return prisma.$transaction(async (tx) => {
+    await tx.plannedExercise.deleteMany({ where: { sessionId: id } });
+    return tx.session.update({
+      where: { id },
+      data: {
+        type: input.type,
+        title: input.title ?? null,
+        location: input.location ?? DEFAULT_LOCATION,
+        notes: input.notes ?? null,
+        warmup: serializeFlowItems(input.warmup),
+        cooldown: serializeFlowItems(input.cooldown),
+        plannedExercises: {
+          create: input.exercises.map((e, i) => ({
+            order: i,
+            exerciseName: e.name,
+            targetSets: e.sets ?? null,
+            targetReps: e.reps ?? null,
+            targetWeightKg: e.weightKg ?? null,
+            restSeconds: e.restSeconds ?? null,
+            setStyle: e.setStyle ?? null,
+            durationSeconds: e.durationSeconds ?? null,
+            tempo: e.tempo ?? null,
+            supersetGroup: e.superset ?? null,
+            notes: e.notes ?? null,
+          })),
+        },
+      },
+      include: { plannedExercises: { orderBy: { order: 'asc' } } },
+    });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Reschedule / duplicate / delete — shared by the in-app server actions AND the
 // external x-api-key endpoints so both behave identically.
@@ -317,6 +361,53 @@ export async function previousWeights(
 }
 
 // ---------------------------------------------------------------------------
+// Warm-up memory (Package O item 3): mirror the warm-up an exercise had LAST
+// time. For each name, find the most recent completed session that logged any
+// warm-up sets for it and return those sets' weight+reps in order. Never a
+// fixed default — an exercise with no warm-up history returns nothing.
+// ---------------------------------------------------------------------------
+export interface PreviousWarmupSet {
+  weightKg: number | null;
+  reps: number | null;
+}
+
+export async function previousWarmups(
+  prisma: PrismaClient,
+  names: string[],
+  beforeDate?: Date,
+): Promise<Record<string, PreviousWarmupSet[]>> {
+  const unique = [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+  if (unique.length === 0) return {};
+
+  const rows = await prisma.strengthSet.findMany({
+    where: {
+      exerciseName: { in: unique },
+      isWarmup: true,
+      session: {
+        status: 'completed',
+        ...(beforeDate ? { date: { lt: beforeDate } } : {}),
+      },
+    },
+    include: { session: { select: { date: true } } },
+    // Most-recent day first; within a session, warm-up order is row id ascending.
+    orderBy: [{ session: { date: 'desc' } }, { id: 'asc' }],
+    take: unique.length * 40,
+  });
+
+  const out: Record<string, PreviousWarmupSet[]> = {};
+  const seenDay: Record<string, number> = {};
+  for (const r of rows) {
+    const name = r.exerciseName;
+    const day = Math.floor(r.session.date.getTime() / 86_400_000);
+    // Only mirror the single most-recent session that had warm-ups.
+    if (out[name] && seenDay[name] !== day) continue;
+    if (!out[name]) { out[name] = []; seenDay[name] = day; }
+    out[name].push({ weightKg: r.weightKg, reps: r.reps });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Logging actuals against a plan → marks it completed.
 // ---------------------------------------------------------------------------
 export interface ActualSetInput {
@@ -339,6 +430,9 @@ export interface CompletePlanInput {
   notes?: string | null;
   warmup?: FlowItem[] | null;   // logged warm-up items (done + loggedWeightKg)
   cooldown?: FlowItem[] | null; // logged cool-down items
+  // Package O: per-exercise logged notes, keyed by planned-exercise ORDER
+  // (order -> note). Written to PlannedExercise.loggedNote on save.
+  exerciseNotes?: Record<number, string | null>;
   strengthSets: ActualSetInput[];
   run?: {
     distanceKm?: number | null;
@@ -451,6 +545,50 @@ export function tickedStrengthSets(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Package R fix 1: reconstruct a completed session's saved sets into per-planned-
+// exercise rows (aligned by exercise order) so the logger can hydrate from the
+// DATABASE. Pure — the caller (log page) maps these to pre-ticked grid rows.
+// ---------------------------------------------------------------------------
+export interface CompletedActualRow {
+  kg: string; reps: string; dur: string; rpe: string; rpeHi: string; warmup: boolean;
+}
+export interface SavedSetLike {
+  exerciseName: string;
+  reps: number | null;
+  weightKg: number | null;
+  durationSeconds: number | null;
+  rpe: number | null;
+  rpeHigh: number | null;
+  isWarmup: boolean;
+}
+export function reconstructCompletedRows(
+  plannedExercises: { exerciseName: string }[],
+  strengthSets: SavedSetLike[],
+): CompletedActualRow[][] {
+  const byName = new Map<string, SavedSetLike[]>();
+  for (const s of strengthSets) {
+    const arr = byName.get(s.exerciseName) ?? [];
+    arr.push(s);
+    byName.set(s.exerciseName, arr);
+  }
+  const consumed = new Set<string>();
+  return plannedExercises.map((e) => {
+    // The first planned exercise of a given name claims that name's saved rows
+    // (duplicate names in one plan are rare; a later duplicate gets none).
+    const rows = !consumed.has(e.exerciseName) ? (byName.get(e.exerciseName) ?? []) : [];
+    consumed.add(e.exerciseName);
+    return rows.map((s) => ({
+      kg: s.weightKg != null ? String(s.weightKg) : '',
+      reps: s.reps != null ? String(s.reps) : '',
+      dur: s.durationSeconds != null ? String(s.durationSeconds) : '',
+      rpe: s.rpe != null ? String(s.rpe) : '',
+      rpeHi: s.rpeHigh != null ? String(s.rpeHigh) : '',
+      warmup: s.isWarmup,
+    }));
+  });
+}
+
 /** Run actuals resolved by the caller (HR provenance already picked). */
 export interface CompletedRunData {
   distanceKm: number | null;
@@ -514,5 +652,16 @@ export async function saveCompletedActuals(
         runs: runData ? { create: runData } : undefined,
       },
     });
+
+    // Package O: write per-exercise logged notes onto the matching
+    // PlannedExercise rows (keyed by `order`), idempotently. An explicit empty
+    // note clears it; an unmentioned exercise is left as-is.
+    if (raw.exerciseNotes && typeof raw.exerciseNotes === 'object') {
+      const planned = await tx.plannedExercise.findMany({ where: { sessionId }, select: { id: true, order: true } });
+      for (const pe of planned) {
+        if (!(pe.order in raw.exerciseNotes)) continue;
+        await tx.plannedExercise.update({ where: { id: pe.id }, data: { loggedNote: strOrNull(raw.exerciseNotes[pe.order]) } });
+      }
+    }
   });
 }
