@@ -6,6 +6,7 @@ import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
 import { fmtClock } from '@/lib/format';
+import { parseTempoRegions } from '@/lib/tempo';
 import type { FlowItem } from '@/lib/flowItems';
 import {
   saveDraft as saveSessionDraft,
@@ -75,6 +76,36 @@ function vibrate(pattern: number | number[]): void {
 const selectAllOnFocus = (e: React.FocusEvent<HTMLInputElement>) => { try { e.currentTarget.select(); } catch { /* ignore */ } };
 // Strict metronome: every tempo tick is one identical flat blip.
 const TICK_FREQ = 880, TICK_DUR = 0.045, TICK_PEAK = 0.2;
+// Package P: region-based tempo cues. Each region has its OWN pitch so the
+// lifter can follow tempo by ear — lower for the descent, higher for the lift —
+// rather than a flat beat. Distinct from the rest-end chime (item 6).
+const TEMPO_REGION_FREQ: Record<string, number> = { ecc: 392, bottom: 330, con: 587, top: 494 };
+function playRegionCue(key: string): void { playTone(TEMPO_REGION_FREQ[key] ?? 440, 0.12, 0.26); }
+function playTempoSubTick(): void { playTone(880, 0.03, 0.1); } // soft interior second
+function playExplode(): void { playTone(784, 0.16, 0.32); }    // explosive concentric accent
+// A clear rising two-note "starting now" cue at the end of the setup delay —
+// its own pitch pair (523 -> 784), unlike rest-end (660 -> 990).
+function playStartingNow(): void {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+  const t0 = ctx.currentTime;
+  const note = (freq: number, at: number, dur: number, peak = 0.3) => {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle'; o.frequency.value = freq;
+      o.connect(g); g.connect(ctx.destination);
+      const t = t0 + at;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      o.start(t); o.stop(t + dur + 0.02);
+      o.onended = () => { try { o.disconnect(); g.disconnect(); } catch { /* gone */ } };
+    } catch { /* audio unavailable */ }
+  };
+  note(523, 0, 0.14); note(784, 0.13, 0.3);
+}
 // Rest countdown blip (T-3/T-2/T-1): a short, low, same-pitch tick each second.
 const REST_COUNT_FREQ = 620;
 // Package N item 6: the rest-END cue must be clearly DIFFERENT from the tempo
@@ -802,6 +833,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const nextField: Field | null =
     activeFieldIdx > -1 && activeFieldIdx < activeOrder.length - 1 ? activeOrder[activeFieldIdx + 1] : null;
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
+  // Package P: the tempo block's superset siblings — the movements in the active
+  // exercise's superset that carry a tempo, so it can offer tabs to alternate.
+  const tempoMembers = useMemo(() => {
+    const g = groups.find((grp) => grp.items.some((it) => it.index === active.ei));
+    if (!g || g.items.length < 2) return [] as { ei: number; name: string; tempo: string }[];
+    return g.items.filter((it) => it.ex.tempo).map((it) => ({ ei: it.index, name: it.ex.name, tempo: it.ex.tempo as string }));
+  }, [groups, active.ei]);
   const doneCount = sets.reduce((a, rows) => a + rows.filter((r) => r.done).length, 0);
   const totalCount = sets.reduce((a, rows) => a + rows.length, 0);
   const activeRows = sets[active.ei] ?? [];
@@ -1208,7 +1246,16 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </button>
               </div>
             ) : (
-              activeEx?.tempo ? <TempoPlayer tempo={activeEx.tempo} frozen={paused} /> : null
+              activeEx?.tempo ? (
+                <TempoBlock
+                  tempo={activeEx.tempo}
+                  exerciseName={activeEx.name}
+                  members={tempoMembers}
+                  activeEi={active.ei}
+                  onPick={(ei) => setActive((a) => ({ ...a, ei, si: Math.min(a.si, (sets[ei]?.length ?? 1) - 1) }))}
+                  frozen={paused}
+                />
+              ) : null
             )}
           </>
         )}
@@ -1510,117 +1557,199 @@ function ExitSheet({ elapsed, progress, onClose, onKeepRunning, onSaveLater, onS
   );
 }
 
-// --- Tempo metronome ---------------------------------------------------------
-interface TempoPhase { label: string; sec: number; }
-function parseTempo(tempo: string): TempoPhase[] {
-  const labels = ['Lower', 'Bottom', 'Raise', 'Top'];
-  const out: TempoPhase[] = [];
-  tempo.toUpperCase().slice(0, 4).split('').forEach((c, i) => {
-    const sec = c === 'X' ? 1 : Number(c);
-    if (!Number.isFinite(sec) || sec <= 0) return;
-    out.push({ label: c === 'X' && i === 2 ? 'Explode' : labels[i], sec });
-  });
-  return out;
-}
+// --- Region-based tempo engine (Package P) -----------------------------------
+// Parsing lives in lib/tempo.ts (pure + unit-tested); this component is the
+// audible/visual engine over it. Each region drives its OWN cue.
+const SETUP_PRESETS = [5, 10, 15];
+interface TempoDisp { ri: number; remaining: number; rep: number }
 
-interface TempoDisp { pi: number; remaining: number; rep: number }
-
-function TempoPlayer({ tempo, frozen }: { tempo: string; frozen?: boolean }) {
-  const phases = useMemo(() => parseTempo(tempo), [tempo]);
-  const bounds = useMemo(() => { let acc = 0; return phases.map((p) => (acc += p.sec)); }, [phases]);
+function TempoBlock({ tempo, exerciseName, members, activeEi, onPick, frozen }: {
+  tempo: string;
+  exerciseName: string;
+  members: { ei: number; name: string; tempo: string }[]; // superset siblings with a tempo
+  activeEi: number;
+  onPick: (ei: number) => void;
+  frozen?: boolean;
+}) {
+  const regions = useMemo(() => parseTempoRegions(tempo), [tempo]);
+  const bounds = useMemo(() => { let acc = 0; return regions.map((r) => (acc += r.sec)); }, [regions]);
   const cycle = bounds.length ? bounds[bounds.length - 1] : 0;
 
-  const [running, setRunning] = useState(false);
-  const [disp, setDisp] = useState<TempoDisp>({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
+  const [mode, setMode] = useState<'idle' | 'setup' | 'running'>('idle');
+  const [setupDelay, setSetupDelay] = useState(10); // configurable 5-15s (item 2)
+  const [setupLeft, setSetupLeft] = useState(0);
+  const [disp, setDisp] = useState<TempoDisp>({ ri: 0, remaining: regions[0]?.sec ?? 0, rep: 0 });
 
   const rafRef = useRef<number | null>(null);
+  const setupTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const setupEndRef = useRef(0);
   const startedAtRef = useRef(0);
   const accumRef = useRef(0);
   const lastSecondRef = useRef(-1);
+  const lastRegionRef = useRef(-1);
 
   const stopRaf = () => { if (rafRef.current != null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; } };
+  const stopSetup = () => { if (setupTimer.current) { clearInterval(setupTimer.current); setupTimer.current = null; } };
 
-  // Absolute-timestamp rAF engine (kept exactly as-is). Item 1: the metronome
-  // fires ONE IDENTICAL tick every whole second — same pitch, same volume, like
-  // a real metronome. No pitch change on phase boundaries. No vibration.
   const frame = useCallback(() => {
     if (!cycle) return;
     const elapsed = (accumRef.current + (performance.now() - startedAtRef.current)) / 1000;
     const rep = Math.floor(elapsed / cycle);
     const within = elapsed - rep * cycle;
-    let pi = 0;
-    while (pi < bounds.length - 1 && within >= bounds[pi]) pi++;
-    const remaining = Math.max(0, bounds[pi] - within);
+    let ri = 0;
+    while (ri < bounds.length - 1 && within >= bounds[ri]) ri++;
+    const remaining = Math.max(0, bounds[ri] - within);
 
-    const secondIndex = Math.floor(elapsed + 1e-6);
-    if (secondIndex !== lastSecondRef.current) {
-      lastSecondRef.current = secondIndex;
-      playTone(TICK_FREQ, TICK_DUR, TICK_PEAK); // identical every second
+    // Region entry → that region's distinct cue (or the explosive accent).
+    const globalRegion = rep * regions.length + ri;
+    if (globalRegion !== lastRegionRef.current) {
+      lastRegionRef.current = globalRegion;
+      lastSecondRef.current = Math.floor(elapsed + 1e-6); // don't also sub-tick this instant
+      const r = regions[ri];
+      if (r?.explosive) playExplode(); else if (r) playRegionCue(r.key);
+    } else {
+      // Interior whole-second → soft sub-tick (so a 3s region is felt, not silent).
+      const secondIndex = Math.floor(elapsed + 1e-6);
+      if (secondIndex !== lastSecondRef.current) { lastSecondRef.current = secondIndex; playTempoSubTick(); }
     }
 
     const remCeil = Math.max(0, Math.ceil(remaining - 1e-6));
-    setDisp((prev) => (prev.pi === pi && prev.rep === rep && prev.remaining === remCeil) ? prev : { pi, remaining: remCeil, rep });
+    setDisp((prev) => (prev.ri === ri && prev.rep === rep && prev.remaining === remCeil) ? prev : { ri, remaining: remCeil, rep });
     rafRef.current = requestAnimationFrame(frame);
-  }, [bounds, cycle]);
+  }, [bounds, cycle, regions]);
 
-  const start = useCallback(() => {
-    if (!phases.length) return;
-    unlockAudio();
-    startedAtRef.current = performance.now();
-    setRunning(true);
-    stopRaf();
-    rafRef.current = requestAnimationFrame(frame);
-  }, [frame, phases.length]);
-
-  const pause = useCallback(() => {
-    accumRef.current += performance.now() - startedAtRef.current;
-    stopRaf();
-    setRunning(false);
-  }, []);
-
-  const reset = useCallback(() => {
-    stopRaf();
-    setRunning(false);
+  const beginRunning = useCallback(() => {
     accumRef.current = 0;
     lastSecondRef.current = -1;
-    setDisp({ pi: 0, remaining: phases[0]?.sec ?? 0, rep: 0 });
-  }, [phases]);
+    lastRegionRef.current = -1;
+    startedAtRef.current = performance.now();
+    setMode('running');
+    stopRaf();
+    rafRef.current = requestAnimationFrame(frame);
+  }, [frame]);
 
+  // Setup delay countdown (item 2): visible number + soft ticks, then a clear
+  // "starting now" cue, then the tempo begins.
+  const runSetupInterval = useCallback(() => {
+    stopSetup();
+    setupTimer.current = setInterval(() => {
+      const left = Math.max(0, Math.ceil((setupEndRef.current - performance.now()) / 1000));
+      setSetupLeft((prev) => {
+        if (left !== prev && left > 0) { playTone(REST_COUNT_FREQ, 0.06, 0.16); vibrate(20); }
+        return left;
+      });
+      if (left <= 0) { stopSetup(); playStartingNow(); vibrate([60, 40, 60]); beginRunning(); }
+    }, 100);
+  }, [beginRunning]);
+
+  const start = useCallback(() => {
+    if (!regions.length) return;
+    unlockAudio();
+    if (setupDelay > 0) {
+      setMode('setup');
+      setSetupLeft(setupDelay);
+      setupEndRef.current = performance.now() + setupDelay * 1000;
+      runSetupInterval();
+    } else {
+      beginRunning();
+    }
+  }, [regions.length, setupDelay, runSetupInterval, beginRunning]);
+
+  const pause = useCallback(() => {
+    if (mode === 'setup') { stopSetup(); setMode('idle'); return; }
+    accumRef.current += performance.now() - startedAtRef.current;
+    stopRaf();
+    setMode('idle');
+  }, [mode]);
+
+  const reset = useCallback(() => {
+    stopRaf(); stopSetup();
+    setMode('idle');
+    accumRef.current = 0;
+    lastSecondRef.current = -1;
+    lastRegionRef.current = -1;
+    setDisp({ ri: 0, remaining: regions[0]?.sec ?? 0, rep: 0 });
+  }, [regions]);
+
+  // Auto-load: reset the engine whenever the loaded tempo changes (item 3 —
+  // switching exercises in a superset auto-loads the new prescription).
   useEffect(() => { reset(); }, [tempo, reset]);
-  useEffect(() => () => stopRaf(), []);
-  useEffect(() => { if (frozen && running) pause(); }, [frozen, running, pause]);
+  useEffect(() => () => { stopRaf(); stopSetup(); }, []);
+  useEffect(() => { if (frozen && mode !== 'idle') pause(); }, [frozen, mode, pause]);
 
-  if (!phases.length) {
-    return <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo “{tempo}” has no timed phases.</div>;
-  }
-  const st = disp;
-  const cur = phases[st.pi];
+  const running = mode === 'running';
 
   return (
     <div style={{ padding: '2px 2px 4px' }}>
+      {/* Superset awareness (item 3): tabs to flip between alternating movements,
+          each auto-loading its own tempo. */}
+      {members.length > 1 && (
+        <div className="seg" style={{ marginBottom: 10 }}>
+          {members.map((m) => (
+            <button key={m.ei} className={`seg-item ${m.ei === activeEi ? 'active' : ''}`} onClick={() => onPick(m.ei)}>
+              {m.name.length > 12 ? m.name.slice(0, 11) + '…' : m.name} · {m.tempo}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>TEMPO · {tempo}</div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>Rep {st.rep + 1}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{exerciseName.toUpperCase()} · TEMPO {tempo}</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)', flex: 'none' }}>Rep {disp.rep + 1}</div>
       </div>
-      <div style={{ textAlign: 'center', margin: '8px 0 12px' }}>
-        <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? cur.label : 'Ready'}</div>
-        <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? st.remaining : phases[0].sec}</div>
-      </div>
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-        {phases.map((p, i) => (
-          <div key={i} style={{ flex: p.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === st.pi ? 'var(--accent)' : 'var(--seg-track)', color: running && i === st.pi ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.label}</div>
-            <div style={{ fontSize: 13, fontWeight: 700 }}>{p.sec}s</div>
+
+      {regions.length === 0 ? (
+        <div style={{ padding: 12, fontSize: 13, color: 'var(--text-dim)', textAlign: 'center' }}>Tempo &ldquo;{tempo}&rdquo; has no timed regions.</div>
+      ) : (
+        <>
+          <div style={{ textAlign: 'center', margin: '10px 0 12px' }}>
+            {mode === 'setup' ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.04em' }}>GET SET UP</div>
+                <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{setupLeft}</div>
+                <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>Tempo starts at 0</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.01em' }}>{running ? regions[disp.ri]?.label : 'Ready'}</div>
+                <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{running ? disp.remaining : regions[0].sec}</div>
+              </>
+            )}
           </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={reset} style={restSmBtn}>Reset</button>
-        <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={running ? pause : start}>
-          <span className="msr-fill" style={{ fontSize: 20 }}>{running ? 'pause' : 'play_arrow'}</span>{running ? 'Pause' : 'Start tempo'}
-        </button>
-      </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Steady metronome: one tick every second</div>
+
+          {/* Region bar — proportional segments, current region highlighted. */}
+          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+            {regions.map((r, i) => (
+              <div key={i} style={{ flex: r.sec, minWidth: 0, textAlign: 'center', padding: '7px 4px', borderRadius: 10, background: running && i === disp.ri ? 'var(--accent)' : 'var(--seg-track)', color: running && i === disp.ri ? 'var(--on-accent)' : 'var(--text-dim)', transition: 'background 0.15s' }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.03em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.label}</div>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{r.explosive ? 'X' : r.sec}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Setup delay picker (item 2), shown while idle. */}
+          {mode === 'idle' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 11.5, fontWeight: 600, color: 'var(--text-faint)', flex: 'none' }}>Setup delay</span>
+              <div className="seg" style={{ flex: 1 }}>
+                {SETUP_PRESETS.map((s) => (
+                  <button key={s} className={`seg-item ${setupDelay === s ? 'active' : ''}`} onClick={() => setSetupDelay(s)}>{s}s</button>
+                ))}
+                <button className={`seg-item ${setupDelay === 0 ? 'active' : ''}`} onClick={() => setSetupDelay(0)}>Off</button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={reset} style={restSmBtn}>Reset</button>
+            <button className="btn" style={{ flex: 2, height: 50, borderRadius: 14, margin: 0 }} onClick={mode === 'idle' ? start : pause}>
+              <span className="msr-fill" style={{ fontSize: 20 }}>{mode === 'idle' ? 'play_arrow' : 'pause'}</span>
+              {mode === 'idle' ? (setupDelay > 0 ? 'Start (with setup)' : 'Start tempo') : mode === 'setup' ? 'Cancel setup' : 'Pause'}
+            </button>
+          </div>
+          <div style={{ fontSize: 10.5, color: 'var(--text-faint)', textAlign: 'center', marginTop: 9 }}>Each region has its own cue · lower, pause, lift, hold</div>
+        </>
+      )}
     </div>
   );
 }
