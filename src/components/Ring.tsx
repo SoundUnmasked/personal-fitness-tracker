@@ -1,4 +1,4 @@
-// Progress ring (readiness dial). Pure SVG — safe in server components.
+// Progress ring (readiness dial). Pure SVG, safe in server components.
 export default function Ring({
   value,
   size = 92,
@@ -6,7 +6,7 @@ export default function Ring({
   track = 'var(--track)',
   color = 'var(--accent)',
 }: {
-  value: number | null; // 0–100, null = empty track only
+  value: number | null; // 0 to 100, null = empty track only
   size?: number;
   stroke?: number;
   track?: string;

@@ -141,6 +141,10 @@
    from glow, bloom or coloured light spill. No em or en dashes in this layer.
    ============================================================================= */
 .app-flat {
+  /* Self-contained dark instrument surface: inherited text is bright regardless
+     of the ambient light/dark theme, since these screens are always dark. */
+  color: var(--text-1);
+
   /* surfaces */
   --bg:        #0C0E11;
   --surface-1: #14171B;
@@ -567,3 +571,28 @@ details > summary { list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 details > summary .chev { transition: transform 0.15s ease; }
 details[open] > summary .chev { transform: rotate(180deg); }
+
+/* =============================================================================
+   Flat-screen refinements (stage 3)
+   Applied only under .app-flat: depth comes from surface and space, so cards and
+   tiles drop their outlines and glass blur, and the primary button loses the
+   accent glow. No coloured light spill anywhere.
+   ============================================================================= */
+.app-flat .card,
+.app-flat .tile {
+  border-color: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.app-flat .btn,
+.app-flat .btn-lg {
+  box-shadow: none;
+  border-radius: var(--radius-button);
+}
+/* Sentence case on flat screens: micro-labels are not tracked-out uppercase. */
+.app-flat .eyebrow {
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--font-body);
+}

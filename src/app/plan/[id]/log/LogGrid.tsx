@@ -227,7 +227,7 @@ function workingNo(rows: SetRow[], si: number): number {
 }
 function workingCount(rows: SetRow[]): number { return rows.filter((r) => !r.warmup).length; }
 
-const FIELD_LABEL: Record<Field, string> = { kg: 'WEIGHT · KG', reps: 'REPS', rpe: 'RPE · 0-10', dur: 'TIME · SEC' };
+const FIELD_LABEL: Record<Field, string> = { kg: 'Weight · kg', reps: 'Reps', rpe: 'RPE · 0-10', dur: 'Time · sec' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
 // Fix 9: the primary keypad button cycles fields before it logs, so its label
 // always states what pressing it will actually do.
@@ -914,9 +914,11 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const activeRows = sets[active.ei] ?? [];
   const activeRow = activeRows[active.si];
   const activeIsWarmup = !!activeRow?.warmup;
+  // Distinct from the ledger's "Set" column header: this names the set you are
+  // logging right now, within the current movement.
   const activeSetLabel = activeIsWarmup
-    ? 'WARM-UP SET'
-    : `SET ${workingNo(activeRows, active.si)} OF ${workingCount(activeRows)}`;
+    ? 'Warm-up set'
+    : `Current set · ${workingNo(activeRows, active.si)} of ${workingCount(activeRows)}`;
 
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
   // Item 2: the rest timer is "live" (worth an always-visible strip) whenever a
@@ -925,7 +927,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   const restStripText = rest.mode === 'up' ? mmss(rest.up) : mmss(rest.remaining);
 
   return (
-    <>
+    <div className="app-flat" style={{ display: 'contents' }}>
       {/* Item 2: always-visible rest strip. Fixed to the top so the remaining
           rest time stays on screen while the keypad is open, while tapping other
           sets, and while the page is scrolled. Tapping it opens the rest panel. */}
@@ -936,7 +938,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 46, maxWidth: 460, margin: '0 auto', height: 'calc(38px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', border: 'none', cursor: 'pointer', background: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--accent)' : 'var(--accent-soft)', color: rest.mode === 'down' && rest.remaining <= 3 ? 'var(--on-accent)' : 'var(--accent)', borderBottom: '1px solid var(--accent-line)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}
         >
           <span className="msr-fill" style={{ fontSize: 17 }} aria-hidden="true">{rest.mode === 'up' ? 'timer' : 'hourglass_bottom'}</span>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>{rest.mode === 'up' ? 'TIMING' : 'REST'}</span>
+          <span style={{ fontSize: 12, fontWeight: 600 }}>{rest.mode === 'up' ? 'Timing' : 'Rest'}</span>
           <span style={{ fontSize: 17, fontWeight: 800, fontVariantNumeric: 'tabular-nums', marginLeft: 'auto' }}>{restStripText}</span>
           <span className="msr" style={{ fontSize: 18, opacity: 0.7 }} aria-hidden="true">expand_more</span>
         </button>
@@ -952,9 +954,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
             {editMode ? (
               // S1: edit mode shows EDITING and, if a duration was recorded, the
               // STORED value as a static (non-accent, non-ticking) figure.
-              <>{plan.type} · <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}>EDITING</span>{plan.completed?.durationMin != null && <span style={{ color: 'var(--text-dim)' }}> · {mmss(plan.completed.durationMin * 60)}</span>}</>
+              <>{plan.type} · <span style={{ fontWeight: 600 }}>Editing</span>{plan.completed?.durationMin != null && <span style={{ color: 'var(--text-dim)' }}> · {mmss(plan.completed.durationMin * 60)}</span>}</>
             ) : (
-              <>{plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>{paused && <span style={{ fontWeight: 700, letterSpacing: '0.05em' }}> · PAUSED</span>}</>
+              <>{plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>{paused && <span style={{ fontWeight: 600 }}> · Paused</span>}</>
             )}
           </div>
         </div>
@@ -990,14 +992,14 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           <div key={gi}>
             {g.label && (
               <div className="eyebrow eyebrow-accent" style={{ margin: '0 2px 8px', fontSize: 10.5, display: 'flex', alignItems: 'center', gap: 7 }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />SUPERSET {supersetLabel(groups, gi)}
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />Superset {supersetLabel(groups, gi)}
               </div>
             )}
             {g.items.map(({ ex, index }, pos) => {
               const activeHere = active.ei === index;
               const done = sets[index].filter((s) => s.done).length;
               const style = ex.setStyle === 'duration' ? 'duration' : 'reps';
-              const midLabel = style === 'duration' ? 'SEC' : 'REPS';
+              const midLabel = style === 'duration' ? 'Sec' : 'Reps';
               const editing = editEx === index;
               // Item 3: hide the KG column for movements with no weight
               // (bodyweight / most timed holds) so there is no empty column.
@@ -1007,12 +1009,12 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
               const cols = showKg
                 ? '30px 56px 1fr 1fr 1fr 44px'
                 : '30px 56px 1fr 1fr 44px';
-              const headers = showKg ? ['SET', 'PREV', 'KG', midLabel, 'RPE'] : ['SET', 'PREV', midLabel, 'RPE'];
+              const headers = showKg ? ['Set', 'Prev', 'Kg', midLabel, 'RPE'] : ['Set', 'Prev', midLabel, 'RPE'];
               return (
                 <div key={index} className="card" style={{ padding: 15, marginBottom: g.items.length > 1 ? 10 : 0, borderLeft: `3px solid ${activeHere ? 'var(--accent)' : 'var(--border)'}` }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 }}>
                     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 11, minWidth: 0 }}>
-                      <div aria-hidden="true" style={{ flex: 'none', minWidth: 30, height: 30, padding: '0 8px', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 800, letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums', background: activeHere ? 'var(--accent)' : 'var(--accent-soft)', color: activeHere ? 'var(--on-accent)' : 'var(--accent)' }}>{exerciseLabel(groups, gi, pos)}</div>
+                      <div aria-hidden="true" style={{ flex: 'none', minWidth: 30, height: 30, padding: '0 8px', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', fontVariantNumeric: 'tabular-nums', background: activeHere ? 'var(--accent)' : 'var(--surface-3)', color: activeHere ? 'var(--on-accent)' : 'var(--text-2)' }}>{exerciseLabel(groups, gi, pos)}</div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
                         <div style={{ fontSize: 11, color: 'var(--text-faint)', marginTop: 2 }}>
@@ -1023,7 +1025,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       </div>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length && sets[index].length > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: done === sets[index].length && sets[index].length > 0 ? 'var(--text-1)' : 'var(--text-dim)' }}>{done}/{sets[index].length}</div>
                       {/* Package O: one-tap per-exercise note. Filled state gets the accent. */}
                       <button onClick={() => setNoteTarget(index)} aria-label={exNotes[index]?.trim() ? `Edit note for ${ex.name}` : `Add note for ${ex.name}`} style={{ width: 28, height: 26, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '1px solid var(--border)', background: exNotes[index]?.trim() ? 'var(--accent-soft)' : 'var(--surface)', color: exNotes[index]?.trim() ? 'var(--accent)' : 'var(--text-dim)' }}>
                         <span className="msr-fill" style={{ fontSize: 15 }} aria-hidden="true">{exNotes[index]?.trim() ? 'sticky_note_2' : 'note_add'}</span>
@@ -1143,7 +1145,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
                   {activeHere && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 800, letterSpacing: '0.03em', color: 'var(--accent)' }}>{activeSetLabel}</div>
+                      <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)' }}>{activeSetLabel}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-faint)' }}>
                         <span className="msr" style={{ fontSize: 13 }} aria-hidden="true">touch_app</span>
                         tap a cell, then use the keypad below
@@ -1250,7 +1252,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '10px 12px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--border)' }}>
                     <span className="msr-fill" style={{ fontSize: 20, color: sw.running ? 'var(--accent)' : 'var(--text-dim)' }} aria-hidden="true">timer</span>
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--text-faint)' }}>COUNT-UP TIMER</div>
+                      <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)' }}>Count-up timer</div>
                       <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>{mmss(sw.running ? sw.elapsed : (Number(activeVal) || 0))}</div>
                     </div>
                     <button onClick={durToggle} className="btn-sm" style={{ height: 40, minWidth: 96, background: sw.running ? 'var(--accent)' : 'var(--accent-soft)', color: sw.running ? 'var(--on-accent)' : 'var(--accent)', border: sw.running ? 'none' : '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
@@ -1280,7 +1282,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{rest.mode === 'up' ? 'COUNT-UP' : 'REST'}</div>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-faint)' }}>{rest.mode === 'up' ? 'Count-up' : 'Rest'}</div>
                   {rest.mode === 'down' && restEditing ? (
                     <RestTimeInput
                       initialSeconds={rest.remaining}
@@ -1395,7 +1397,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           onDiscard={endDiscard}
         />
       )}
-    </>
+    </div>
   );
 }
 
@@ -1788,7 +1790,7 @@ function TempoBlock({ tempo, exerciseName, members, activeEi, onPick, frozen }: 
           <div style={{ textAlign: 'center', margin: '10px 0 12px' }}>
             {mode === 'setup' ? (
               <>
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', letterSpacing: '0.04em' }}>GET SET UP</div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--accent-text)' }}>Get set up</div>
                 <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums' }}>{setupLeft}</div>
                 <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>Tempo starts at 0</div>
               </>
