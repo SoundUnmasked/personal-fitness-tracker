@@ -424,6 +424,12 @@ export interface ActualSetInput {
 
 export interface CompletePlanInput {
   durationMin?: number | null;
+  // Package S2 (write-once duration): normally `durationMin` is written ONLY on
+  // the first Finish; a re-save of a session that already has a duration leaves
+  // it untouched (a re-open/edit must never overwrite real recorded time). Set
+  // `durationOverride: true` ONLY for a deliberate, explicit edit of the
+  // duration field itself.
+  durationOverride?: boolean;
   energyPre?: number | null;
   rpeOverall?: number | null;
   cooldownDone?: boolean;
@@ -615,6 +621,14 @@ export async function saveCompletedActuals(
 ): Promise<void> {
   const sets: ActualSetInput[] = Array.isArray(raw.strengthSets) ? raw.strengthSets : [];
   await prisma.$transaction(async (tx) => {
+    // Package S2 (CRITICAL): duration is WRITE-ONCE. Read the session's current
+    // duration inside the transaction; if it already has one, a re-save leaves
+    // it untouched — the edit session's elapsed time must never overwrite the
+    // real recorded duration. Only a deliberate `durationOverride` may replace
+    // it (never a side effect of saving sets).
+    const current = await tx.session.findUnique({ where: { id: sessionId }, select: { durationMin: true } });
+    const keepDuration = current?.durationMin != null && raw.durationOverride !== true;
+
     await tx.strengthSet.deleteMany({ where: { sessionId } });
     await tx.run.deleteMany({ where: { sessionId } });
 
@@ -622,7 +636,8 @@ export async function saveCompletedActuals(
       where: { id: sessionId },
       data: {
         status: 'completed',
-        durationMin: intOrNull(raw.durationMin),
+        // Write-once: omit durationMin entirely when preserving an existing one.
+        ...(keepDuration ? {} : { durationMin: intOrNull(raw.durationMin) }),
         energyPre: intOrNull(raw.energyPre),
         // Float, not int: 7.5 must survive (fix 4 — intOrNull rounded it to 8).
         rpeOverall: floatOrNull(raw.rpeOverall),
