@@ -982,6 +982,22 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     ? 'Warm-up set'
     : `Current set · ${workingNo(activeRows, active.si)} of ${workingCount(activeRows)}`;
 
+  // Session-level position: which working set of the whole session is active,
+  // out of every working set planned. Derived from real rows, so the header can
+  // read "Set 6 of 22" without any new field.
+  const sessionSetTotal = sets.reduce((a, rows) => a + rows.filter((r) => !r.warmup).length, 0);
+  const sessionSetPos = (() => {
+    let n = 0;
+    for (let e = 0; e < sets.length; e++) {
+      for (let s = 0; s < sets[e].length; s++) {
+        if (sets[e][s].warmup) continue;
+        n++;
+        if (e === active.ei && s === active.si) return n;
+      }
+    }
+    return n;
+  })();
+
   const restPct = rest.total ? Math.max(0, (rest.remaining / rest.total) * 100) : 0;
   // Item 2: the rest timer is "live" (worth an always-visible strip) whenever a
   // countdown is running OR the count-up stopwatch is running.
@@ -1011,14 +1027,24 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 7, padding: '10px 2px', marginBottom: 4, marginTop: restLive ? 40 : 0 }}>
         <button className="icon-btn" onClick={() => setExitOpen(true)} aria-label="Back out of session"><span className="msr" aria-hidden="true">chevron_left</span></button>
         <div style={{ flex: 1, textAlign: 'center', minWidth: 0 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
-          <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)', marginTop: 2 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{plan.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, fontSize: 11.5, fontWeight: 500, color: 'var(--text-2)', marginTop: 3 }}>
             {editMode ? (
-              // S1: edit mode shows EDITING and, if a duration was recorded, the
-              // STORED value as a static (non-accent, non-ticking) figure.
-              <>{plan.type} · <span style={{ fontWeight: 600 }}>Editing</span>{plan.completed?.durationMin != null && <span style={{ color: 'var(--text-dim)' }}> · {mmss(plan.completed.durationMin * 60)}</span>}</>
+              // S1: edit mode shows a static Editing state and, if a duration was
+              // recorded, the stored value (non-accent, non-ticking).
+              <><span style={{ fontWeight: 600, color: 'var(--text-2)' }}>Editing</span>{plan.completed?.durationMin != null && <span style={{ fontVariantNumeric: 'tabular-nums' }}>{mmss(plan.completed.durationMin * 60)}</span>}</>
             ) : (
-              <>{plan.type} · <span style={{ color: paused ? 'var(--text-faint)' : 'var(--accent)', fontWeight: 600 }}>{mmss(elapsed)}</span>{paused && <span style={{ fontWeight: 600 }}> · Paused</span>}</>
+              <>
+                {paused ? (
+                  <span style={{ fontWeight: 600 }}>Paused</span>
+                ) : (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, color: 'var(--accent-text)', fontWeight: 600 }}>
+                    <span className="pft-live-dot" aria-hidden="true" style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--accent)' }} />Live
+                  </span>
+                )}
+                <span style={{ color: paused ? 'var(--text-faint)' : 'var(--text-1)', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{mmss(elapsed)}</span>
+                {sessionSetTotal > 0 && <span style={{ fontVariantNumeric: 'tabular-nums' }}>Set {sessionSetPos} of {sessionSetTotal}</span>}
+              </>
             )}
           </div>
         </div>
@@ -1284,57 +1310,76 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
 
             {panel === 'entry' ? (
               <>
-                {/* Current-set card: the focal editing surface. Each field is a
-                    native decimal input (inputmode="decimal"), so tapping one
-                    opens the phone keyboard rather than a custom pad. */}
-                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10, padding: '0 2px', gap: 10 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{activeSetLabel}</div>
+                {/* Current-set card: the single focal point. The hero reads the
+                    working weight and reps at 56px; the active field carries the
+                    only accent (a 2px underline). Each number is a native input
+                    (inputmode decimal; RPE is text so a range can be typed), so
+                    tapping one opens the phone keyboard. */}
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 4, padding: '0 2px', gap: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{activeSetLabel}</div>
                   {(activeRow?.prevKg || activeRow?.prevReps) && (
-                    <div style={{ fontSize: 11.5, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <div style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       Last time {activeRow.prevKg ? `${activeRow.prevKg} kg` : ''}{activeRow.prevKg && activeRow.prevReps ? ' × ' : ''}{activeRow.prevReps ?? ''}
                     </div>
                   )}
                 </div>
 
-                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                  {activeOrder.map((f) => {
+                {/* Hero readout, weight first then reps (or the timed value). */}
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                  {activeOrder.filter((f) => f !== 'rpe').map((f, i) => {
                     const isActive = active.field === f;
-                    const ref = f === 'kg' ? kgInputRef : f === 'rpe' ? rpeInputRef : midInputRef;
-                    // RPE shows the typed range via rpeDisplay (plain hyphen); the
-                    // other fields show their raw decimal value.
-                    const raw = f === 'rpe' ? rpeDisplay(activeRow ?? { rpe: '', rpeHi: '' }) : (activeRow?.[f] ?? '');
+                    const ref = f === 'kg' ? kgInputRef : midInputRef;
+                    const raw = activeRow?.[f] ?? '';
+                    const unit = f === 'kg' ? 'kg' : f === 'dur' ? 'sec' : '';
                     return (
-                      <label key={f} style={{ flex: 1, minWidth: 0, display: 'block', margin: 0 }}>
-                        <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--text-3)', marginBottom: 4 }}>{FIELD_LABEL[f]}</span>
-                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, height: 52, padding: '0 12px', borderRadius: 'var(--radius-input)', background: 'var(--surface-3)', boxShadow: isActive ? 'inset 0 -2px 0 0 var(--accent)' : 'none' }}>
-                          <input
-                            ref={ref}
-                            inputMode={f === 'rpe' ? 'text' : 'decimal'}
-                            enterKeyHint="next"
-                            value={raw}
-                            placeholder={f === 'rpe' ? '' : '0'}
-                            aria-label={`${activeSetLabel}, ${FIELD_LABEL[f]}`}
-                            onFocus={(e) => { setActive((a) => ({ ...a, field: f })); selectAllOnFocus(e); }}
-                            onChange={(e) => writeEntry(f, e.target.value)}
-                            onBlur={f === 'rpe' ? () => commitRpe() : undefined}
-                            onKeyDown={(e) => {
-                              if (e.key !== 'Enter') return;
-                              e.preventDefault();
-                              if (f === 'rpe') commitRpe();
-                              const i = activeOrder.indexOf(f);
-                              if (i > -1 && i < activeOrder.length - 1) focusField(activeOrder[i + 1]);
-                              else logSet();
-                            }}
-                            style={{ flex: 1, minWidth: 0, width: '100%', height: '100%', border: 'none', background: 'transparent', color: raw === '' ? 'var(--text-3)' : 'var(--text-1)', fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', padding: 0, fontVariantNumeric: 'tabular-nums' }}
-                          />
-                          <span style={{ flex: 'none', fontSize: 12, fontWeight: 500, color: 'var(--text-2)' }}>{FIELD_UNIT[f]}</span>
-                        </span>
-                      </label>
+                      <span key={f} style={{ display: 'inline-flex', alignItems: 'baseline', gap: 6 }}>
+                        {i > 0 && f === 'reps' && <span style={{ fontSize: 30, fontWeight: 400, color: 'var(--text-3)' }}>×</span>}
+                        <input
+                          ref={ref}
+                          inputMode="decimal"
+                          enterKeyHint="next"
+                          value={raw}
+                          placeholder="0"
+                          aria-label={`${activeSetLabel}, ${FIELD_LABEL[f]}`}
+                          onFocus={(e) => { setActive((a) => ({ ...a, field: f })); selectAllOnFocus(e); }}
+                          onChange={(e) => writeEntry(f, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key !== 'Enter') return;
+                            e.preventDefault();
+                            const idx = activeOrder.indexOf(f);
+                            if (idx > -1 && idx < activeOrder.length - 1) focusField(activeOrder[idx + 1]);
+                            else logSet();
+                          }}
+                          style={{ width: `${Math.min(4.5, Math.max(1, (raw.length || 1)) + 0.3)}ch`, minWidth: '1ch', border: 'none', background: 'transparent', padding: '0 0 2px', color: raw === '' ? 'var(--text-3)' : 'var(--text-1)', fontSize: 56, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.05, fontVariantNumeric: 'tabular-nums', textAlign: 'center', borderBottom: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}` }}
+                        />
+                        {unit && <span style={{ fontSize: 20, fontWeight: 500, color: 'var(--text-2)' }}>{unit}</span>}
+                      </span>
                     );
                   })}
                 </div>
-                {active.field === 'rpe' && (
-                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', margin: '0 2px 10px' }}>Unsure? Type a range like 6-7.</div>
+
+                {/* RPE: a blank Surface-3 field (never a dash), a typed range shown
+                    with a plain hyphen. */}
+                {activeOrder.includes('rpe') && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-3)' }}>RPE</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', height: 40, padding: '0 14px', borderRadius: 'var(--radius-input)', background: 'var(--surface-3)', boxShadow: active.field === 'rpe' ? 'inset 0 -2px 0 0 var(--accent)' : 'none' }}>
+                      <input
+                        ref={rpeInputRef}
+                        inputMode="text"
+                        enterKeyHint="done"
+                        value={rpeDisplay(activeRow ?? { rpe: '', rpeHi: '' })}
+                        placeholder=""
+                        aria-label={`${activeSetLabel}, RPE`}
+                        onFocus={(e) => { setActive((a) => ({ ...a, field: 'rpe' })); selectAllOnFocus(e); }}
+                        onChange={(e) => writeEntry('rpe', e.target.value)}
+                        onBlur={() => commitRpe()}
+                        onKeyDown={(e) => { if (e.key !== 'Enter') return; e.preventDefault(); commitRpe(); logSet(); }}
+                        style={{ width: '3.5ch', border: 'none', background: 'transparent', padding: 0, color: 'var(--text-1)', fontSize: 18, fontWeight: 600, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
+                      />
+                    </span>
+                    {active.field === 'rpe' && <span style={{ fontSize: 11.5, color: 'var(--text-3)' }}>Type a range like 6-7</span>}
+                  </div>
                 )}
 
                 {active.field === 'dur' && (
@@ -1407,7 +1452,21 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                   </div>
                 )}
 
-                <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={restToggle}>
+                {/* Up next: while resting, the set you are about to do, so the
+                    resting card still answers "what is next". */}
+                {activeRow && !activeIsWarmup && (activeRow.kg || activeRow.reps || activeRow.dur) && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, padding: '10px 12px', borderRadius: 'var(--radius-input)', background: 'var(--surface-1)' }}>
+                    <span style={{ fontSize: 11.5, fontWeight: 500, color: 'var(--text-3)' }}>Up next</span>
+                    <span style={{ fontSize: 12, color: 'var(--text-2)' }}>Set {workingNo(activeRows, active.si)}</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 14, fontWeight: 600, color: 'var(--text-1)', fontVariantNumeric: 'tabular-nums' }}>
+                      {activeRow.dur
+                        ? mmss(Number(activeRow.dur) || 0)
+                        : <>{activeRow.kg ? `${activeRow.kg} kg` : ''}{activeRow.kg && activeRow.reps ? ' × ' : ''}{activeRow.reps ?? ''}</>}
+                    </span>
+                  </div>
+                )}
+
+                <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 'var(--radius-button)' }} onClick={restToggle}>
                   <span className="msr-fill" style={{ fontSize: 20 }}>{rest.running ? 'pause' : 'play_arrow'}</span>{rest.running ? 'Pause' : rest.mode === 'up' ? 'Start count-up' : 'Start rest'}
                 </button>
               </div>
