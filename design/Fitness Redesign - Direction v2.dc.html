@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;450;500;600;700&family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Geist',system-ui,-apple-system,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:'tnum' 1;font-variant-numeric:tabular-nums;background:#080A0D}
+a{color:#7CA0EA;text-decoration:none}
+a:hover{color:#9DB8F0}
+.m{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;white-space:nowrap;font-feature-settings:'liga';font-variation-settings:'FILL' 0,'wght' 400,'opsz' 24;vertical-align:middle}
+.mf{font-family:'Material Symbols Rounded';font-weight:normal;font-style:normal;line-height:1;white-space:nowrap;font-feature-settings:'liga';font-variation-settings:'FILL' 1,'wght' 500,'opsz' 24;vertical-align:middle}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+</style>
+</helmet>
+
+<div style="--bg:#0C0E11;--s1:#14171B;--s2:#1C2026;--s3:#262B32;--line:#2E343B;--ink:#F1F3F5;--dim:#98A0A8;--faint:#666E76;--accent:#3E6FD9;background:#080A0D;min-height:100vh;padding:60px 60px 80px;color:var(--ink)">
+
+  <div style="max-width:2200px;margin:0 auto 52px">
+    <div style="font-size:12px;font-weight:500;color:var(--faint)">Personal fitness tracker · direction v2</div>
+    <div style="font-size:40px;font-weight:600;letter-spacing:-0.03em;margin-top:12px;line-height:1.1">Craft pass: revision</div>
+    <div style="font-size:15px;color:var(--dim);margin-top:12px;max-width:720px;line-height:1.5;text-wrap:pretty">Native numeric keyboard in place of the custom pad, resting promoted to a full card state, sequential set numbering, and a defined use for home's lower third with an empty connected-data slot. Craft spec and structure otherwise unchanged.</div>
+  </div>
+
+  <div style="display:flex;gap:44px;align-items:flex-start;flex-wrap:wrap;max-width:2200px;margin:0 auto">
+
+    <!-- ==================== 1 · LIVE LOGGING GRID · TWO STATES ==================== -->
+    <div style="display:flex;flex-direction:column;gap:18px;flex:none">
+      <div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:600;color:var(--ink)">1 · Active logging grid</div><div style="font-size:12px;color:var(--faint)">the working screen · two states</div></div>
+
+      <div style="display:flex;gap:36px;align-items:flex-start">
+
+        <!-- ---- STATE A: keyboard open, entering ---- -->
+        <div style="display:flex;flex-direction:column;gap:14px;width:390px;flex:none">
+          <div style="font-size:12px;font-weight:500;color:var(--dim)">Keyboard open: entering set 3</div>
+          <div style="width:390px;height:844px;flex:none;border-radius:46px;overflow:hidden;position:relative;display:flex;flex-direction:column;background:var(--bg);box-shadow:0 44px 96px -46px rgba(0,0,0,0.9),inset 0 0 0 1px rgba(255,255,255,0.05)">
+
+            <div style="height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font-size:14px;font-weight:600"><span>9:41</span><span style="display:flex;gap:8px;align-items:center;color:var(--dim)"><span class="m" style="font-size:16px">signal_cellular_alt</span><span class="m" style="font-size:16px">wifi</span><span class="m" style="font-size:18px">battery_full</span></span></div>
+
+            <div style="flex:none;padding:6px 20px 14px;display:flex;align-items:center;gap:14px">
+              <div style="width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--dim);margin-left:-6px"><span class="m" style="font-size:26px">chevron_left</span></div>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Power · Lower</div><div style="font-size:13px;color:var(--faint);margin-top:2px">Set 6 of 22</div></div>
+              <div style="display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1.8s ease-in-out infinite"></span><span style="font-size:13px;font-weight:600;color:#7CA0EA">Live</span></div>
+              <div style="display:inline-flex;align-items:baseline;gap:5px;color:var(--dim)"><span class="m" style="font-size:15px;position:relative;top:2px">schedule</span><span style="font-size:15px;font-weight:600">24:15</span></div>
+            </div>
+
+            <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:0 20px;overflow:hidden">
+              <div style="display:flex;align-items:baseline;gap:9px"><div style="font-size:13px;font-weight:500;color:var(--faint)">01</div><div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">Trap-bar deadlift</div></div>
+              <div style="display:flex;align-items:center;gap:16px;margin-top:6px;font-size:12px;font-weight:500;color:var(--faint)"><span>Target <span style="color:var(--dim)">4 × 5</span></span><span>Weight <span style="color:var(--dim)">100 kg</span></span><span>RPE <span style="color:var(--dim)">7-8</span></span></div>
+
+              <!-- done rows 1,2 -->
+              <div style="margin-top:12px;display:flex;flex-direction:column">
+                <div style="display:flex;align-items:center;gap:14px;padding:8px 4px"><span class="mf" style="font-size:19px;color:var(--dim)">check_circle</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">1</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">100 kg × 5</div><div style="font-size:13px;font-weight:450;color:var(--faint)">RPE 7</div></div>
+                <div style="height:1px;background:var(--line)"></div>
+                <div style="display:flex;align-items:center;gap:14px;padding:8px 4px"><span class="mf" style="font-size:19px;color:var(--dim)">check_circle</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">2</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">100 kg × 5</div><div style="font-size:13px;font-weight:450;color:var(--faint)">RPE 7</div></div>
+              </div>
+
+              <!-- HERO: set 3 entry -->
+              <div style="margin-top:12px;border-radius:16px;padding:18px 20px;background:var(--s2)">
+                <div style="font-size:12px;font-weight:500;color:var(--dim)">Set 3 of 4</div>
+                <div style="display:flex;align-items:baseline;gap:9px;margin-top:12px">
+                  <span style="font-size:56px;font-weight:600;letter-spacing:-0.03em;line-height:1;color:var(--ink)">100</span>
+                  <span style="font-size:16px;font-weight:500;color:var(--dim)">kg</span>
+                  <span style="font-size:26px;font-weight:400;color:var(--faint);margin:0 2px">×</span>
+                  <input inputmode="decimal" value="5" readonly style="width:52px;border:none;background:transparent;border-bottom:2px solid var(--accent);font-family:inherit;font-feature-settings:'tnum' 1;font-size:56px;font-weight:600;letter-spacing:-0.03em;line-height:1;color:var(--ink);text-align:center;padding:0 0 3px;outline:none">
+                  <span style="font-size:16px;font-weight:500;color:var(--dim)">reps</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;margin-top:18px"><span style="font-size:12px;font-weight:500;color:var(--dim)">RPE</span><span style="width:54px;height:34px;border-radius:10px;background:var(--s3)"></span><span style="flex:1"></span><span style="font-size:13px;font-weight:450;color:var(--faint)">Last time <span style="color:var(--dim);font-weight:500">95 kg × 5</span></span></div>
+              </div>
+
+              <!-- upcoming row 4 -->
+              <div style="margin-top:10px;display:flex;align-items:center;gap:14px;padding:8px 4px"><span class="m" style="font-size:19px;color:var(--faint)">radio_button_unchecked</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">4</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--faint)">Upcoming</div></div>
+            </div>
+
+            <!-- keyboard accessory + native decimal keyboard -->
+            <div style="flex:none;display:flex;align-items:center;gap:12px;padding:9px 16px;background:var(--s2)">
+              <span style="font-size:13px;font-weight:500;color:var(--dim)">Reps</span>
+              <span style="flex:1"></span>
+              <div style="height:38px;padding:0 18px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;gap:7px;font-size:14px;font-weight:600"><span class="mf" style="font-size:18px">check</span>Log set 3</div>
+            </div>
+            <div style="flex:none;background:#26282D;padding:8px 6px 0">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">1</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">2</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">3</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">4</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">5</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">6</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">7</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">8</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">9</div>
+                <div style="height:46px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400">.</div>
+                <div style="height:46px;border-radius:8px;background:#3C3F46;color:#fff;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:400;box-shadow:0 1px 0 rgba(0,0,0,0.45)">0</div>
+                <div style="height:46px;border-radius:8px;color:#fff;display:flex;align-items:center;justify-content:center"><span class="m" style="font-size:26px">backspace</span></div>
+              </div>
+              <div style="height:24px;display:flex;justify-content:center;align-items:center"><div style="width:134px;height:5px;border-radius:3px;background:rgba(255,255,255,0.55)"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ---- STATE B: keyboard closed, resting ---- -->
+        <div style="display:flex;flex-direction:column;gap:14px;width:390px;flex:none">
+          <div style="font-size:12px;font-weight:500;color:var(--dim)">Keyboard closed: resting</div>
+          <div style="width:390px;height:844px;flex:none;border-radius:46px;overflow:hidden;position:relative;display:flex;flex-direction:column;background:var(--bg);box-shadow:0 44px 96px -46px rgba(0,0,0,0.9),inset 0 0 0 1px rgba(255,255,255,0.05)">
+
+            <div style="height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font-size:14px;font-weight:600"><span>9:41</span><span style="display:flex;gap:8px;align-items:center;color:var(--dim)"><span class="m" style="font-size:16px">signal_cellular_alt</span><span class="m" style="font-size:16px">wifi</span><span class="m" style="font-size:18px">battery_full</span></span></div>
+
+            <div style="flex:none;padding:6px 20px 14px;display:flex;align-items:center;gap:14px">
+              <div style="width:36px;height:36px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--dim);margin-left:-6px"><span class="m" style="font-size:26px">chevron_left</span></div>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Power · Lower</div><div style="font-size:13px;color:var(--faint);margin-top:2px">Set 6 of 22</div></div>
+              <div style="display:inline-flex;align-items:center;gap:6px"><span style="width:7px;height:7px;border-radius:50%;background:var(--accent);animation:pulse 1.8s ease-in-out infinite"></span><span style="font-size:13px;font-weight:600;color:#7CA0EA">Live</span></div>
+              <div style="display:inline-flex;align-items:baseline;gap:5px;color:var(--dim)"><span class="m" style="font-size:15px;position:relative;top:2px">schedule</span><span style="font-size:15px;font-weight:600">24:15</span></div>
+            </div>
+
+            <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:0 20px">
+              <div style="display:flex;align-items:baseline;gap:9px"><div style="font-size:13px;font-weight:500;color:var(--faint)">01</div><div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">Trap-bar deadlift</div></div>
+
+              <!-- RESTING as a full card state -->
+              <div style="margin-top:14px;border-radius:16px;padding:22px 22px 20px;background:var(--s2)">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 1.8s ease-in-out infinite"></span><span style="font-size:14px;font-weight:600;color:#7CA0EA">Resting</span><span style="flex:1"></span><span style="font-size:12px;font-weight:500;color:var(--faint)">Set 3 logged</span></div>
+                <div style="font-size:56px;font-weight:600;letter-spacing:-0.03em;line-height:1;margin-top:16px">1:28</div>
+                <div style="height:8px;border-radius:4px;background:var(--s3);overflow:hidden;margin-top:18px"><div style="width:62%;height:100%;border-radius:4px;background:var(--accent)"></div></div>
+                <div style="display:flex;gap:8px;margin-top:16px">
+                  <div style="flex:1;height:46px;border-radius:10px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:var(--dim)">−15s</div>
+                  <div style="flex:1.5;height:46px;border-radius:10px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600">Skip rest</div>
+                  <div style="flex:1;height:46px;border-radius:10px;background:var(--s3);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;color:var(--dim)">+15s</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;margin-top:18px"><span style="font-size:13px;font-weight:500;color:var(--faint)">Up next</span><span style="font-size:15px;font-weight:600">Set 4</span><span style="flex:1"></span><span style="font-size:13px;font-weight:450;color:var(--dim)">100 kg × 5</span></div>
+              </div>
+
+              <!-- full ledger 1,2,3 done, 4 next -->
+              <div style="margin-top:16px;display:flex;flex-direction:column">
+                <div style="display:flex;align-items:center;gap:14px;padding:10px 4px"><span class="mf" style="font-size:19px;color:var(--dim)">check_circle</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">1</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">100 kg × 5</div><div style="font-size:13px;font-weight:450;color:var(--faint)">RPE 7</div></div>
+                <div style="height:1px;background:var(--line)"></div>
+                <div style="display:flex;align-items:center;gap:14px;padding:10px 4px"><span class="mf" style="font-size:19px;color:var(--dim)">check_circle</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">2</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">100 kg × 5</div><div style="font-size:13px;font-weight:450;color:var(--faint)">RPE 7</div></div>
+                <div style="height:1px;background:var(--line)"></div>
+                <div style="display:flex;align-items:center;gap:14px;padding:10px 4px"><span class="mf" style="font-size:19px;color:var(--dim)">check_circle</span><div style="font-size:13px;font-weight:500;color:var(--faint);width:16px">3</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">100 kg × 5</div><div style="font-size:13px;font-weight:450;color:var(--faint)">RPE 8</div></div>
+                <div style="height:1px;background:var(--line)"></div>
+                <div style="display:flex;align-items:center;gap:14px;padding:10px 4px"><span class="m" style="font-size:19px;color:#7CA0EA">radio_button_unchecked</span><div style="font-size:13px;font-weight:500;color:var(--dim);width:16px">4</div><div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">Up next</div><div style="font-size:13px;font-weight:450;color:var(--faint)">100 kg × 5</div></div>
+              </div>
+            </div>
+
+            <div style="flex:none;padding:12px 20px 26px"><div style="height:52px;border-radius:12px;background:var(--s1);color:var(--dim);display:flex;align-items:center;justify-content:center;gap:8px;font-size:14px;font-weight:500"><span class="m" style="font-size:20px">keyboard</span>Tap a value to edit</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:var(--s1);border-radius:16px;padding:16px 18px;max-width:816px">
+        <div style="font-size:12px;font-weight:600;color:var(--ink)">Focal point</div>
+        <div style="font-size:13px;font-weight:450;color:var(--dim);line-height:1.5;margin-top:7px;text-wrap:pretty">Entry uses the phone's own decimal keyboard, so there is nothing custom to learn; the set-3 card stays fully visible above it and the Log action sits on the keyboard accessory bar. When resting, the one moment the timer matters most, the card becomes the timer: 1:28 at hero size with skip and adjust. Sets read 1, 2, 3, 4 in sequence with no gap.</div>
+      </div>
+    </div>
+
+    <!-- ==================== 2 · PLANNED SESSION PREVIEW ==================== -->
+    <div style="display:flex;flex-direction:column;gap:18px;width:390px;flex:none">
+      <div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:600;color:var(--ink)">2 · Planned session preview</div><div style="font-size:12px;color:var(--faint)">the pre-session read</div></div>
+
+      <div style="width:390px;height:844px;flex:none;border-radius:46px;overflow:hidden;position:relative;display:flex;flex-direction:column;background:var(--bg);box-shadow:0 44px 96px -46px rgba(0,0,0,0.9),inset 0 0 0 1px rgba(255,255,255,0.05)">
+
+        <div style="height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font-size:14px;font-weight:600"><span>9:41</span><span style="display:flex;gap:8px;align-items:center;color:var(--dim)"><span class="m" style="font-size:16px">signal_cellular_alt</span><span class="m" style="font-size:16px">wifi</span><span class="m" style="font-size:18px">battery_full</span></span></div>
+
+        <div style="flex:none;padding:6px 20px 0;display:flex;align-items:center;justify-content:space-between">
+          <div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;color:var(--dim);margin-left:-6px"><span class="m" style="font-size:26px">chevron_left</span></div>
+          <div style="display:flex;gap:4px;color:var(--faint)"><div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center"><span class="m" style="font-size:21px">edit</span></div><div style="width:36px;height:36px;display:flex;align-items:center;justify-content:center"><span class="m" style="font-size:21px">more_horiz</span></div></div>
+        </div>
+
+        <div style="flex:1;min-height:0;overflow:hidden;padding:8px 20px 0;display:flex;flex-direction:column">
+          <div style="font-size:13px;font-weight:500;color:var(--faint)">Wed 23 Jul</div>
+          <div style="font-size:28px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;margin-top:8px">Power · Lower</div>
+          <div style="font-size:13px;font-weight:450;color:var(--dim);margin-top:6px">Strength block, week 3</div>
+          <div style="font-size:15px;font-weight:450;color:var(--dim);line-height:1.4;margin-top:12px;text-wrap:pretty">Heavy trap-bar off the floor, then unilateral volume. Bring chalk.</div>
+
+          <div style="margin-top:20px;border-radius:16px;padding:18px 20px;background:var(--s2)">
+            <div style="font-size:12px;font-weight:500;color:var(--dim)">Top-set effort</div>
+            <div style="display:flex;align-items:baseline;gap:8px;margin-top:10px"><span style="font-size:15px;font-weight:500;color:var(--dim)">RPE</span><span style="font-size:56px;font-weight:600;line-height:1;letter-spacing:-0.03em">8-9</span></div>
+            <div style="display:flex;gap:28px;margin-top:20px">
+              <div><div style="font-size:20px;font-weight:600;letter-spacing:-0.01em">6</div><div style="font-size:12px;font-weight:500;color:var(--faint);margin-top:3px">exercises</div></div>
+              <div><div style="font-size:20px;font-weight:600;letter-spacing:-0.01em">22</div><div style="font-size:12px;font-weight:500;color:var(--faint);margin-top:3px">sets</div></div>
+              <div><div style="font-size:20px;font-weight:600;letter-spacing:-0.01em">52 min</div><div style="font-size:12px;font-weight:500;color:var(--faint);margin-top:3px">estimated</div></div>
+            </div>
+          </div>
+
+          <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;margin:14px 0 6px">The plan</div>
+
+          <div style="display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;gap:14px;padding:12px 2px">
+              <div style="font-size:13px;font-weight:500;color:var(--faint);width:20px">1</div>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:500">Trap-bar deadlift</div><div style="display:flex;gap:16px;font-size:12px;font-weight:450;color:var(--faint);margin-top:3px"><span>2:30 rest</span><span>Last 95 kg × 5</span></div></div>
+              <div style="font-size:15px;font-weight:600;white-space:nowrap">4 × 5</div>
+            </div>
+            <div style="height:1px;background:var(--line)"></div>
+
+            <div style="padding:11px 2px 5px"><span style="font-size:12px;font-weight:600;color:#7CA0EA">Superset: alternate</span></div>
+            <div style="display:flex;align-items:center;gap:14px;padding:9px 2px 9px 10px;border-left:2px solid var(--accent);margin-left:2px">
+              <div style="font-size:13px;font-weight:500;color:var(--faint);width:20px">2</div>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:500">Bulgarian split squat</div><div style="font-size:12px;font-weight:450;color:var(--faint);margin-top:3px">Last 24 kg × 8</div></div>
+              <div style="font-size:15px;font-weight:600">3 × 8</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;padding:9px 2px 9px 10px;border-left:2px solid var(--accent);margin-left:2px">
+              <div style="font-size:13px;font-weight:500;color:var(--faint);width:20px">3</div>
+              <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:500">Romanian deadlift</div><div style="font-size:12px;font-weight:450;color:var(--faint);margin-top:3px">Last 70 kg × 10</div></div>
+              <div style="font-size:15px;font-weight:600">3 × 10</div>
+            </div>
+            <div style="height:1px;background:var(--line);margin-top:6px"></div>
+            <div style="display:flex;align-items:center;gap:14px;padding:12px 2px">
+              <div style="font-size:13px;font-weight:500;color:var(--faint);width:20px">4-6</div>
+              <div style="flex:1;font-size:15px;font-weight:450;color:var(--dim)">Leg press, calf raise, hanging leg raise</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:none;padding:14px 20px 28px"><div style="height:56px;border-radius:12px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;gap:9px;font-size:16px;font-weight:600"><span class="mf" style="font-size:23px">play_arrow</span>Start session</div></div>
+      </div>
+
+      <div style="background:var(--s1);border-radius:16px;padding:16px 18px">
+        <div style="font-size:12px;font-weight:600;color:var(--ink)">Focal point</div>
+        <div style="font-size:13px;font-weight:450;color:var(--dim);line-height:1.5;margin-top:7px;text-wrap:pretty">One raised card answers how hard: top-set RPE 8-9 with exercises, sets and estimate below, all real fields, no chart. Exercises number 1, 2, 3, then 4-6 grouped, with no gap. Start is the only accent button.</div>
+      </div>
+    </div>
+
+    <!-- ==================== 3 · HOME ==================== -->
+    <div style="display:flex;flex-direction:column;gap:18px;width:390px;flex:none">
+      <div style="display:flex;align-items:baseline;gap:10px"><div style="font-size:15px;font-weight:600;color:var(--ink)">3 · Home</div><div style="font-size:12px;color:var(--faint)">the lightest screen</div></div>
+
+      <div style="width:390px;height:844px;flex:none;border-radius:46px;overflow:hidden;position:relative;display:flex;flex-direction:column;background:var(--bg);box-shadow:0 44px 96px -46px rgba(0,0,0,0.9),inset 0 0 0 1px rgba(255,255,255,0.05)">
+
+        <div style="height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font-size:14px;font-weight:600"><span>9:41</span><span style="display:flex;gap:8px;align-items:center;color:var(--dim)"><span class="m" style="font-size:16px">signal_cellular_alt</span><span class="m" style="font-size:16px">wifi</span><span class="m" style="font-size:18px">battery_full</span></span></div>
+
+        <div style="flex:1;min-height:0;padding:12px 20px 0;display:flex;flex-direction:column">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between">
+            <div><div style="font-size:13px;font-weight:500;color:var(--faint)">Wed 23 Jul</div><div style="font-size:28px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;margin-top:6px">Morning, Oliver</div></div>
+            <div style="width:44px;height:44px;flex:none;border-radius:50%;background:var(--s2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:16px">O</div>
+          </div>
+
+          <div style="margin-top:26px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px"><div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">This week</div><div style="display:flex;gap:14px;font-size:12px;font-weight:500;color:var(--faint)"><span>2 done</span><span>4 planned</span></div></div>
+            <div style="display:flex;gap:8px">
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">M</span><span class="mf" style="font-size:22px;color:var(--dim)">check_circle</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">T</span><span class="mf" style="font-size:22px;color:var(--dim)">check_circle</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:600;color:#7CA0EA">W</span><span style="width:13px;height:13px;border-radius:50%;background:var(--accent)"></span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">T</span><span style="width:9px;height:9px;border-radius:50%;background:var(--s3)"></span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">F</span><span style="width:9px;height:9px;border-radius:50%;background:var(--s3)"></span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">S</span><span style="width:9px;height:9px;border-radius:50%;background:var(--s3)"></span></div>
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:9px"><span style="font-size:12px;font-weight:500;color:var(--faint)">S</span><span style="width:9px;height:9px;border-radius:50%;background:var(--s3);opacity:0.5"></span></div>
+            </div>
+          </div>
+
+          <!-- connected-data empty slot -->
+          <div style="margin-top:24px;border-radius:16px;padding:16px;background:var(--s1);border:1px dashed var(--line);display:flex;align-items:center;gap:14px">
+            <div style="width:40px;height:40px;flex:none;border-radius:10px;background:var(--s2);display:flex;align-items:center;justify-content:center;color:var(--faint)"><span class="m" style="font-size:22px">bedtime</span></div>
+            <div style="flex:1;min-width:0"><div style="font-size:15px;font-weight:600">Sleep</div><div style="font-size:12px;font-weight:450;color:var(--faint);margin-top:2px">Connect Strava to show last night</div></div>
+            <div style="height:34px;padding:0 14px;border-radius:10px;background:var(--s2);display:flex;align-items:center;font-size:13px;font-weight:600;color:#7CA0EA">Connect</div>
+          </div>
+
+          <div style="flex:1;min-height:20px"></div>
+
+          <div style="font-size:13px;font-weight:500;color:var(--dim)">Today</div>
+          <div style="font-size:28px;font-weight:600;letter-spacing:-0.02em;line-height:1.1;margin-top:8px">Power · Lower</div>
+          <div style="display:flex;gap:16px;margin-top:12px;font-size:13px;font-weight:450;color:var(--dim)"><span>6 exercises</span><span>52 min</span><span>top RPE 8-9</span></div>
+          <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
+            <span style="font-size:12px;font-weight:450;color:var(--dim);padding:6px 12px;border-radius:10px;background:var(--s1)">Trap-bar deadlift</span>
+            <span style="font-size:12px;font-weight:450;color:var(--dim);padding:6px 12px;border-radius:10px;background:var(--s1)">Split squat</span>
+            <span style="font-size:12px;font-weight:450;color:var(--faint);padding:6px 12px;border-radius:10px;background:var(--s1)">4 more</span>
+          </div>
+          <div style="height:58px;margin-top:20px;border-radius:12px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;gap:10px;font-size:17px;font-weight:600"><span class="mf" style="font-size:23px">play_arrow</span>Open session</div>
+        </div>
+
+        <div style="height:82px;flex:none;display:flex;align-items:flex-start;justify-content:space-between;padding:14px 32px 0;border-top:1px solid var(--line)">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;color:#7CA0EA"><span class="mf" style="font-size:24px">home</span><span style="font-size:11px;font-weight:600">Home</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--faint)"><span class="m" style="font-size:24px">calendar_month</span><span style="font-size:11px;font-weight:500">Plan</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--faint)"><span class="m" style="font-size:24px">show_chart</span><span style="font-size:11px;font-weight:500">Metrics</span></div>
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--faint)"><span class="m" style="font-size:24px">person</span><span style="font-size:11px;font-weight:500">You</span></div>
+        </div>
+      </div>
+
+      <div style="background:var(--s1);border-radius:16px;padding:16px 18px">
+        <div style="font-size:12px;font-weight:600;color:var(--ink)">Focal point</div>
+        <div style="font-size:13px;font-weight:450;color:var(--dim);line-height:1.5;margin-top:7px;text-wrap:pretty">Today's session and one Open button, anchored low. The lower third now holds a real, defined use: an empty Sleep slot ready for a connected source, shown as a placeholder with no invented numbers. Only today's dot carries accent.</div>
+      </div>
+    </div>
+
+    <!-- ==================== DETAIL CROP 2x + TOKENS ==================== -->
+    <div style="display:flex;flex-direction:column;gap:34px;width:640px;flex:none;padding-top:34px">
+
+      <div>
+        <div style="font-size:15px;font-weight:600;color:var(--ink);margin-bottom:16px">Current set · 2× detail</div>
+        <div style="width:640px;height:392px;border-radius:16px;overflow:hidden;background:var(--bg);position:relative">
+          <div style="position:absolute;top:40px;left:40px;transform:scale(2);transform-origin:top left;width:280px">
+            <div style="display:flex;align-items:baseline;gap:9px"><div style="font-size:13px;font-weight:500;color:var(--faint)">01</div><div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">Trap-bar deadlift</div></div>
+            <div style="border-radius:16px;padding:20px;background:var(--s2);margin-top:12px">
+              <div style="font-size:12px;font-weight:500;color:var(--dim)">Set 3 of 4</div>
+              <div style="display:flex;align-items:baseline;gap:8px;margin-top:12px">
+                <span style="font-size:56px;font-weight:600;letter-spacing:-0.03em;line-height:1">100</span>
+                <span style="font-size:16px;font-weight:500;color:var(--dim)">kg</span>
+                <span style="font-size:26px;font-weight:400;color:var(--faint)">×</span>
+                <span style="display:inline-flex;padding:0 4px 4px;border-bottom:2px solid var(--accent)"><span style="font-size:56px;font-weight:600;letter-spacing:-0.03em;line-height:1">5</span></span>
+                <span style="font-size:16px;font-weight:500;color:var(--dim)">reps</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:10px;margin-top:16px"><span style="font-size:12px;font-weight:500;color:var(--dim)">RPE</span><span style="width:48px;height:30px;border-radius:10px;background:var(--s3)"></span><span style="flex:1"></span><span style="font-size:12px;font-weight:450;color:var(--faint)">Last 95 kg × 5</span></div>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:13px;font-weight:450;color:var(--dim);line-height:1.5;margin-top:12px;max-width:560px;text-wrap:pretty">Tabular figures keep 100 and 95 the same width as values change. Weight before reps in the 100 kg × 5 format, a true multiplication sign, an accent underline on the active field, and an empty RPE field rather than a placeholder dash.</div>
+      </div>
+
+      <div style="display:flex;gap:40px;flex-wrap:wrap">
+        <div style="width:280px">
+          <div style="font-size:12px;font-weight:600;color:var(--faint);margin-bottom:14px">Surface ramp</div>
+          <div style="display:flex;flex-direction:column;gap:9px">
+            <div style="display:flex;align-items:center;gap:12px"><div style="width:38px;height:38px;border-radius:8px;background:var(--bg);flex:none;box-shadow:inset 0 0 0 1px var(--line)"></div><div><div style="font-size:13px;font-weight:500">Background</div><div style="font-size:12px;color:var(--faint)">#0C0E11</div></div></div>
+            <div style="display:flex;align-items:center;gap:12px"><div style="width:38px;height:38px;border-radius:8px;background:var(--s1);flex:none"></div><div><div style="font-size:13px;font-weight:500">Surface 1 · rows</div><div style="font-size:12px;color:var(--faint)">#14171B</div></div></div>
+            <div style="display:flex;align-items:center;gap:12px"><div style="width:38px;height:38px;border-radius:8px;background:var(--s2);flex:none"></div><div><div style="font-size:13px;font-weight:500">Surface 2 · current</div><div style="font-size:12px;color:var(--faint)">#1C2026</div></div></div>
+            <div style="display:flex;align-items:center;gap:12px"><div style="width:38px;height:38px;border-radius:8px;background:var(--s3);flex:none"></div><div><div style="font-size:13px;font-weight:500">Surface 3 · input</div><div style="font-size:12px;color:var(--faint)">#262B32</div></div></div>
+            <div style="display:flex;align-items:center;gap:12px"><div style="width:38px;height:38px;border-radius:8px;background:var(--accent);flex:none"></div><div><div style="font-size:13px;font-weight:500">Accent · under 10%</div><div style="font-size:12px;color:var(--faint)">#3E6FD9</div></div></div>
+          </div>
+          <div style="font-size:12px;color:var(--faint);line-height:1.5;margin-top:12px">Text #F1F3F5 / #98A0A8 / #666E76. Status amber #D9A441 and red #C9524B stay paired with a word or icon.</div>
+        </div>
+
+        <div style="width:280px">
+          <div style="font-size:12px;font-weight:600;color:var(--faint);margin-bottom:14px">Type · one face, tabular</div>
+          <div style="display:flex;flex-direction:column;gap:13px">
+            <div style="display:flex;align-items:baseline;gap:12px"><div style="font-size:44px;font-weight:600;letter-spacing:-0.03em;line-height:0.9">100</div><div style="font-size:12px;color:var(--faint)">Hero 56 / 600 / -0.03em</div></div>
+            <div style="display:flex;align-items:baseline;gap:12px"><div style="font-size:24px;font-weight:600;letter-spacing:-0.02em">Power · Lower</div><div style="font-size:12px;color:var(--faint)">Title 28 / 600</div></div>
+            <div style="display:flex;align-items:baseline;gap:12px"><div style="font-size:17px;font-weight:600;letter-spacing:-0.01em">The plan</div><div style="font-size:12px;color:var(--faint)">Section 17 / 600</div></div>
+            <div style="display:flex;align-items:baseline;gap:12px"><div style="font-size:15px;font-weight:450">100 kg × 5</div><div style="font-size:12px;color:var(--faint)">Body 15 / 450</div></div>
+            <div style="display:flex;align-items:baseline;gap:12px"><div style="font-size:12px;font-weight:500;color:var(--dim)">Set 3 of 4</div><div style="font-size:12px;color:var(--faint)">Label 12 / 500</div></div>
+          </div>
+          <div style="font-size:12px;color:var(--faint);line-height:1.5;margin-top:14px">Geist throughout, heavier weight for numbers, tnum enabled everywhere. Radii 16 card / 10 input / 12 button. 4px spacing grid.</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:2200,&quot;height&quot;:1320}}"></script>
+</body>
+</html>
