@@ -140,7 +140,12 @@
    (stage 3 onward). Depth comes from stacked flat surfaces and space, never
    from glow, bloom or coloured light spill. No em or en dashes in this layer.
    ============================================================================= */
-.app-flat {
+/* .app-flat is a full flat screen (paints the dark background and repaints the
+   body). .flat-tokens carries the same token values only, for an overlay such
+   as the session bar that must adopt the system without repainting the body of
+   whatever unrestyled screen it sits on. */
+.app-flat,
+.flat-tokens {
   /* Self-contained dark instrument surface: inherited text is bright regardless
      of the ambient light/dark theme, since these screens are always dark. */
   color: var(--text-1);

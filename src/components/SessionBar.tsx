@@ -80,46 +80,51 @@ export default function SessionBar() {
   // age line stays. Discard clears only the local draft.
   if (stale) {
     return (
-      <div className="session-bar session-bar-stale" role="alert">
-        <span className="msr-fill" aria-hidden="true" style={{ fontSize: 20, flex: 'none' }}>history</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', opacity: 0.85 }}>OLD SESSION · {age.toUpperCase()}</div>
-          <div style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            Discard this old session?
+      <div className="flat-tokens" style={{ display: 'contents' }}>
+        <div className="session-bar session-bar-stale" role="alert">
+          <span className="msr-fill" aria-hidden="true" style={{ fontSize: 20, flex: 'none' }}>history</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 500, opacity: 0.85 }}>Old session, {age}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Discard this old session?
+            </div>
           </div>
+          <button
+            onClick={() => { clearDraft(draft.sessionId); setDraft(null); }}
+            className="session-bar-btn"
+            aria-label="Discard old session"
+          >Discard</button>
+          <Link href={`/plan/${draft.sessionId}/log`} className="session-bar-btn session-bar-btn-ghost" aria-label={`Resume ${draft.title}`}>Resume</Link>
         </div>
-        <button
-          onClick={() => { clearDraft(draft.sessionId); setDraft(null); }}
-          className="session-bar-btn"
-          aria-label="Discard old session"
-        >Discard</button>
-        <Link href={`/plan/${draft.sessionId}/log`} className="session-bar-btn session-bar-btn-ghost" aria-label={`Resume ${draft.title}`}>Resume</Link>
       </div>
     );
   }
 
   return (
-    <Link
-      href={`/plan/${draft.sessionId}/log`}
-      aria-label={`Return to session: ${draft.title}${paused ? ' (paused)' : ''}`}
-      className="session-bar"
-    >
-      <span
-        className={paused ? undefined : 'pft-live-dot'}
-        aria-hidden="true"
-        style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--on-accent)', opacity: paused ? 0.6 : 1, flex: 'none' }}
-      />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', opacity: 0.85 }}>
-          {paused ? 'SESSION PAUSED' : 'SESSION IN PROGRESS'}{age ? ` · ${age.toUpperCase()}` : ''}
+    <div className="flat-tokens" style={{ display: 'contents' }}>
+      <Link
+        href={`/plan/${draft.sessionId}/log`}
+        aria-label={`Return to session: ${draft.title}${paused ? ' (paused)' : ''}`}
+        className="session-bar"
+      >
+        <span
+          className={paused ? undefined : 'pft-live-dot'}
+          aria-hidden="true"
+          style={{ width: 9, height: 9, borderRadius: '50%', background: 'var(--on-accent)', opacity: paused ? 0.6 : 1, flex: 'none' }}
+        />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 500, opacity: 0.85 }}>
+            {paused ? 'Session paused' : 'Session in progress'}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{draft.title}</span>
+            <span style={{ flex: 'none', fontSize: 14, fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{mmss(draft.elapsed)}</span>
+          </div>
         </div>
-        <div style={{ fontSize: 13.5, fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {draft.title} · {paused ? 'paused' : mmss(draft.elapsed)}
-        </div>
-      </div>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12.5, fontWeight: 700, flex: 'none' }}>
-        {paused ? 'Resume' : 'Open'}<span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">chevron_right</span>
-      </span>
-    </Link>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 12.5, fontWeight: 600, flex: 'none' }}>
+          {paused ? 'Resume' : 'Open'}<span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">chevron_right</span>
+        </span>
+      </Link>
+    </div>
   );
 }

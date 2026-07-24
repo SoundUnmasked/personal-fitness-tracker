@@ -57,11 +57,11 @@ export default function CompletedView({ session }: { session: CompletedSession }
   const run = session.runs[0];
 
   return (
-    <>
+    <div className="app-flat">
       <div className="topbar">
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
         <div style={{ flex: 1 }} />
-        <div style={{ padding: '6px 10px', borderRadius: 9, fontSize: 11, fontWeight: 700, background: 'var(--ok-tint)', color: 'var(--accent)' }}>Completed</div>
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '6px 10px', borderRadius: 8, fontSize: 12, fontWeight: 600, background: 'var(--accent-soft)', color: 'var(--accent-text)' }}><span className="msr-fill" style={{ fontSize: 15 }} aria-hidden="true">check_circle</span>Completed</div>
         <SessionActions
           sessionId={session.id}
           dateIso={isoDate(session.date)}
@@ -74,8 +74,8 @@ export default function CompletedView({ session }: { session: CompletedSession }
 
       <div style={{ marginTop: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-            {shortDate(session.date).toUpperCase()}
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-2)' }}>
+            {shortDate(session.date)}
           </div>
           {session.location && <div className="sub">{session.location}</div>}
         </div>
@@ -127,7 +127,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
               <Metric label="Pace" value={run.avgPace || '·'} />
               <Metric label="Avg HR" value={run.avgHr != null ? `${run.avgHr} bpm` : '·'} />
               <Metric label="Max HR" value={run.maxHr != null ? `${run.maxHr} bpm` : '·'} />
-              <Metric label="HR source" value={run.hrSource || '·'} accent={run.hrSource != null && run.hrSource !== 'Samsung'} />
+              <Metric label="HR source" value={run.hrSource || '·'} />
             </div>
             {run.hrSource === 'Samsung' && (
               <div className="note note-accent" style={{ marginTop: 12, marginBottom: 0 }}>
@@ -144,7 +144,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
         <>
           <div className="section-head">
             <div className="h2">Exercises</div>
-            <div className="sub">{groups.length} · {session.sets.length} sets</div>
+            <div className="sub">{groups.length} exercise{groups.length === 1 ? '' : 's'}, {session.sets.length} set{session.sets.length === 1 ? '' : 's'}</div>
           </div>
           <div className="stack stack-12">
             {groups.map((g, gi) => (
@@ -158,7 +158,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
                         {s.weightKg != null ? <><span>{s.weightKg}</span><span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> kg</span></> : s.durationSeconds == null ? <span style={{ color: 'var(--text-faint)' }}>·</span> : null}
                         {s.durationSeconds != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}>{s.weightKg != null ? ' · ' : ''}{fmtClock(s.durationSeconds)}</span>}
                         {s.reps != null && <span style={{ color: 'var(--text-dim)', fontWeight: 500 }}> × {s.reps}</span>}
-                        {s.rpe != null && <span style={{ color: 'var(--accent)', fontWeight: 600 }}>  ·  RPE {s.rpe}{s.rpeHigh != null ? `-${s.rpeHigh}` : ''}</span>}
+                        {s.rpe != null && <span style={{ color: 'var(--text-2)', fontWeight: 600 }}>   RPE {s.rpe}{s.rpeHigh != null ? `-${s.rpeHigh}` : ''}</span>}
                       </div>
                     </div>
                   ))}
@@ -184,7 +184,7 @@ export default function CompletedView({ session }: { session: CompletedSession }
       <StructuredBlock kind="cooldown" raw={session.cooldown} />
 
       <div style={{ height: 20 }} />
-    </>
+    </div>
   );
 }
 
@@ -198,11 +198,11 @@ function Total({ icon, value, label }: { icon: string; value: string; label: str
   );
 }
 
-function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div style={{ minWidth: 68 }}>
-      <div style={{ fontSize: 10.5, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)', textTransform: 'uppercase' }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em', marginTop: 4, color: accent ? 'var(--accent)' : 'var(--text)' }}>{value}</div>
+      <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-3)' }}>{label}</div>
+      <div style={{ fontSize: 16, fontWeight: 600, letterSpacing: '-0.01em', marginTop: 4, color: 'var(--text-1)' }}>{value}</div>
     </div>
   );
 }

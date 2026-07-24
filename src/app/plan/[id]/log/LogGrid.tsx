@@ -6,6 +6,7 @@ import { completePlanAction } from '../../actions';
 import { HR_SOURCES, DEFAULT_REST_SECONDS } from '@/lib/constants';
 import { tickedStrengthSets } from '@/lib/plannedSessions';
 import { fmtClock } from '@/lib/format';
+import { contentSignature, draftWorthKeeping, parseRpeInput } from '@/lib/sessionContent';
 import { parseTempoRegions } from '@/lib/tempo';
 import NoteText from '@/components/NoteText';
 import type { FlowItem } from '@/lib/flowItems';
@@ -227,7 +228,7 @@ function workingNo(rows: SetRow[], si: number): number {
 }
 function workingCount(rows: SetRow[]): number { return rows.filter((r) => !r.warmup).length; }
 
-const FIELD_LABEL: Record<Field, string> = { kg: 'Weight · kg', reps: 'Reps', rpe: 'RPE · 0-10', dur: 'Time · sec' };
+const FIELD_LABEL: Record<Field, string> = { kg: 'Weight · kg', reps: 'Reps', rpe: 'RPE · 1-10', dur: 'Time · sec' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
 const NOTIFY_ASKED = 'pft:notify-asked';
 
@@ -353,6 +354,26 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }, [buildDraft]);
   const saveNow = useCallback(() => { saveSessionDraft(buildDraft()); }, [buildDraft]);
 
+  // Baseline content signature, captured on the first render (before the draft
+  // hydration effect runs), so "did the athlete actually log anything" is a
+  // comparison against the pristine plan, not against empty fields.
+  const pristineSigRef = useRef<string | null>(null);
+  if (pristineSigRef.current === null) {
+    pristineSigRef.current = contentSignature(
+      plan.completed ? completedToSets(plan) : plan.exercises.map(initSets),
+      plan.warmup.map((i) => ({ ...i })),
+      plan.cooldown.map((i) => ({ ...i })),
+      plan.exercises.map((e) => e.loggedNote ?? e.planNote ?? ''),
+      plan.completed?.sessionNote ?? '',
+    );
+  }
+  // Worth saving a draft? Any logged content, or a clock past 30s.
+  const hasContent = useCallback((): boolean => draftWorthKeeping(
+    pristineSigRef.current ?? '',
+    contentSignature(setsRef.current, warmupRef.current, cooldownRef.current, exNotesRef.current, sessionNoteRef.current),
+    elapsedRef.current,
+  ), []);
+
   // Hydrate a saved draft once, on mount → restore everything. Item 4b: if it
   // was implicitly paused (backed-out / "save & come back"), RESUME on entry
   // and show a brief "Resumed" toast rather than a pause interstitial.
@@ -415,16 +436,24 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // "Save and come back later" (exitPausedRef=true) freeze the clock.
   useEffect(() => {
     const dispositionPaused = () => exitPausedRef.current ?? pausedRef.current;
-    const onHide = () => { if (document.visibilityState === 'hidden' && !clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); };
-    const onPageHide = () => { if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); };
+    // Only persist a draft that is worth resurrecting. If nothing has been
+    // logged, actively clear any stale draft for this session so merely opening
+    // the logger and leaving cannot leave a phantom session behind.
+    const persist = () => {
+      if (clearedRef.current) return;
+      if (hasContent()) saveSessionDraft(buildDraft(undefined, dispositionPaused()));
+      else clearSessionDraft(plan.id);
+    };
+    const onHide = () => { if (document.visibilityState === 'hidden') persist(); };
+    const onPageHide = () => { persist(); };
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onPageHide);
     return () => {
       document.removeEventListener('visibilitychange', onHide);
       window.removeEventListener('pagehide', onPageHide);
-      if (!clearedRef.current) saveSessionDraft(buildDraft(undefined, dispositionPaused())); // client-side nav away
+      persist(); // client-side nav away
     };
-  }, [buildDraft]);
+  }, [buildDraft, hasContent, plan.id]);
 
   // Fix 6: Android's Back gesture is how people dismiss the keypad, and it was
   // navigating out of the whole session. While a bottom panel is open we park a
@@ -556,10 +585,13 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
     if (!('serviceWorker' in navigator)) return;
     const ends = new Date(endAtMs).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    // Lead with the rest duration, then the absolute end time, so the line is
+    // useful at a glance and stays accurate without a live per-second countdown.
+    const secs = Math.max(1, Math.round((endAtMs - Date.now()) / 1000));
     // `renotify`/`requireInteraction` are valid at runtime but missing from the
     // DOM lib's NotificationOptions, so widen the type here.
     const opts: NotificationOptions = {
-      body: `Rest ends ${ends}`,
+      body: `${secs}s rest, ends ${ends}`,
       tag: 'pft-rest',       // one notification, replaced not stacked
       silent: true,          // the audible cue is the in-app chime, not this
       icon: '/icons/icon-192.png',
@@ -753,29 +785,36 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     focusField(field);
   }
 
-  // Sanitise a native-input value: digits and a single decimal point, capped at
-  // four significant digits (matching the old keypad), then write it to the set.
-  // Editing an RPE value abandons any "7 or 8" range (fix 4).
+  // Sanitise a native-input value and write it to the active set. Weight, reps
+  // and time are decimal (digits and one point, capped at four significant
+  // digits). RPE is typed as text so a range like "6-7" can be entered directly;
+  // it is held raw here (with rpeHi cleared) and parsed on blur and on Log set.
   function writeEntry(field: Field, raw: string) {
+    if (field === 'rpe') {
+      let t = raw.replace(/[^0-9-]/g, '');
+      const h = t.indexOf('-');
+      if (h !== -1) t = t.slice(0, h + 1) + t.slice(h + 1).replace(/-/g, '');
+      if (t.replace('-', '').length > 4) return; // ignore overtyping
+      updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) =>
+        si !== active.si ? row : { ...row, rpe: t, rpeHi: '', suggested: false })));
+      return;
+    }
     let v = raw.replace(/[^0-9.]/g, '');
     const dot = v.indexOf('.');
     if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
     const digits = v.replace('.', '');
     if (digits.length > 4) return; // ignore overtyping past four digits
-    updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
-      if (si !== active.si) return row;
-      const patch: Partial<SetRow> = { [field]: v, suggested: false };
-      if (field === 'rpe') patch.rpeHi = '';
-      return { ...row, ...patch };
-    })));
+    updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) =>
+      si !== active.si ? row : { ...row, [field]: v, suggested: false })));
   }
-  // Fix 4: one-tap "unsure" — records the current RPE as a range "v or v+1".
-  // Tapping again returns to the exact value.
-  function toggleRpeRange() {
+  // Parse the active row's typed RPE (on blur and on Log set): "n" sets an exact
+  // RPE; "n-m" sets a range with m greater than n. Both bounds must be 1 to 10.
+  // Anything else is left exactly as typed so the athlete does not lose input.
+  function commitRpe() {
     const row = sets[active.ei]?.[active.si];
-    if (!row || row.rpe === '') return;
-    const hi = row.rpeHi ? '' : String(Math.min(10, Number(row.rpe) + 1));
-    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, rpeHi: hi } : r)));
+    const next = parseRpeInput(row?.rpe ?? '');
+    if (!next) return; // reject: keep what the user typed
+    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, ...next } : r)));
   }
   function toggle(ei: number, si: number) {
     unlockAudio();
@@ -802,6 +841,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // none in edit mode (S1.3).
   function logSet() {
     unlockAudio();
+    commitRpe(); // parse any typed RPE range before the set is recorded
     const row = sets[active.ei]?.[active.si];
     updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, done: true, suggested: false } : r)));
     const exSets = sets[active.ei];
@@ -894,7 +934,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     exitPausedRef.current = false;
     saveSessionDraft(buildDraft(undefined, false));
     setExitOpen(false);
-    router.push(`/plan/${plan.id}`);
+    // replace, not push: leaving the logger must not stack a history entry, or
+    // Back walks the user into a stale logger mount that re-saves on exit.
+    router.replace(`/plan/${plan.id}`);
   }
   function saveAndComeBack() {
     // Implicitly pause (freeze timers), save a paused draft, leave. Mini-bar
@@ -902,7 +944,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     exitPausedRef.current = true;
     pauseSession();
     setExitOpen(false);
-    router.push(`/plan/${plan.id}`);
+    router.replace(`/plan/${plan.id}`);
   }
   function endSaveFinish() { setExitOpen(false); setFinishing(true); }
   // Discard = throw away THIS attempt's local draft only. Nothing in the DB is
@@ -914,7 +956,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     releaseWake();
     cancelRestNotification();
     setExitOpen(false);
-    router.push(`/plan/${plan.id}`);
+    // replace, not push: a discarded session must not remain reachable via Back.
+    router.replace(`/plan/${plan.id}`);
   }
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
@@ -1257,23 +1300,27 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                   {activeOrder.map((f) => {
                     const isActive = active.field === f;
                     const ref = f === 'kg' ? kgInputRef : f === 'rpe' ? rpeInputRef : midInputRef;
-                    const raw = activeRow?.[f] ?? '';
+                    // RPE shows the typed range via rpeDisplay (plain hyphen); the
+                    // other fields show their raw decimal value.
+                    const raw = f === 'rpe' ? rpeDisplay(activeRow ?? { rpe: '', rpeHi: '' }) : (activeRow?.[f] ?? '');
                     return (
                       <label key={f} style={{ flex: 1, minWidth: 0, display: 'block', margin: 0 }}>
                         <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--text-3)', marginBottom: 4 }}>{FIELD_LABEL[f]}</span>
                         <span style={{ display: 'flex', alignItems: 'center', gap: 3, height: 52, padding: '0 12px', borderRadius: 'var(--radius-input)', background: 'var(--surface-3)', boxShadow: isActive ? 'inset 0 -2px 0 0 var(--accent)' : 'none' }}>
                           <input
                             ref={ref}
-                            inputMode="decimal"
+                            inputMode={f === 'rpe' ? 'text' : 'decimal'}
                             enterKeyHint="next"
                             value={raw}
-                            placeholder="0"
+                            placeholder={f === 'rpe' ? '' : '0'}
                             aria-label={`${activeSetLabel}, ${FIELD_LABEL[f]}`}
                             onFocus={(e) => { setActive((a) => ({ ...a, field: f })); selectAllOnFocus(e); }}
                             onChange={(e) => writeEntry(f, e.target.value)}
+                            onBlur={f === 'rpe' ? () => commitRpe() : undefined}
                             onKeyDown={(e) => {
                               if (e.key !== 'Enter') return;
                               e.preventDefault();
+                              if (f === 'rpe') commitRpe();
                               const i = activeOrder.indexOf(f);
                               if (i > -1 && i < activeOrder.length - 1) focusField(activeOrder[i + 1]);
                               else logSet();
@@ -1286,21 +1333,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                     );
                   })}
                 </div>
-
-                {/* Fix 4: one-tap honest uncertainty, "7 or 8" instead of a forced number. */}
                 {active.field === 'rpe' && (
-                  <button
-                    onClick={toggleRpeRange}
-                    disabled={activeVal === ''}
-                    aria-pressed={!!activeRow?.rpeHi}
-                    style={{ width: '100%', height: 44, marginBottom: 10, borderRadius: 'var(--radius-input)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--accent-line)', background: activeRow?.rpeHi ? 'var(--accent)' : 'var(--accent-soft)', color: activeRow?.rpeHi ? 'var(--on-accent)' : 'var(--accent-text)', opacity: activeVal === '' ? 0.5 : 1 }}
-                  >
-                    {activeRow?.rpeHi
-                      ? `Logged as ${activeVal} or ${activeRow.rpeHi} · tap for exactly ${activeVal}`
-                      : activeVal === ''
-                        ? 'Unsure? Enter an RPE first'
-                        : `Unsure? Log as ${activeVal} or ${Math.min(10, Number(activeVal) + 1)}`}
-                  </button>
+                  <div style={{ fontSize: 11.5, color: 'var(--text-3)', margin: '0 2px 10px' }}>Unsure? Type a range like 6-7.</div>
                 )}
 
                 {active.field === 'dur' && (
