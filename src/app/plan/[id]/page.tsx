@@ -142,8 +142,17 @@ export default async function PlannedSessionPreview({
 
   const totalSets = exs.reduce((a, e) => a + (e.targetSets ?? 0), 0);
 
+  // "How hard" from real fields only: the heaviest planned working set. If no
+  // movement carries a target weight, there is no hero (we keep the totals row).
+  const topSet = exs
+    .filter((e) => e.targetWeightKg != null)
+    .sort((a, b) => (b.targetWeightKg ?? 0) - (a.targetWeightKg ?? 0))[0] ?? null;
+  const topSetValue = topSet
+    ? `${topSet.targetWeightKg} kg${topSet.targetReps != null ? ` × ${topSet.targetReps}` : ''}`
+    : null;
+
   return (
-    <>
+    <div className="app-flat">
       {/* Header */}
       <div className="topbar">
         <Link href="/plan" className="icon-btn"><span className="msr">chevron_left</span></Link>
@@ -163,21 +172,30 @@ export default async function PlannedSessionPreview({
 
       <div style={{ marginTop: 4 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.04em', padding: '4px 10px', borderRadius: 8, background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-            {shortDate(session.date).toUpperCase()}
-          </div>
-          <div className="sub">{session.location}</div>
+          <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--text-2)' }}>{shortDate(session.date)}</div>
+          {session.location && <div className="sub">{session.location}</div>}
         </div>
-        <div className="h1-lg" style={{ marginTop: 12 }}>{session.title || `${session.type} session`}</div>
-        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-dim)', marginTop: 6 }}><NoteText text={session.notes} max={160} /></div>}
+        <div style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 10 }}>{session.title || `${session.type} session`}</div>
+        {session.notes && <div style={{ fontSize: 14, lineHeight: 1.4, color: 'var(--text-2)', marginTop: 6 }}><NoteText text={session.notes} max={160} /></div>}
       </div>
 
-      {/* Totals */}
-      <div className="stat-row" style={{ marginTop: 18 }}>
-        <TotalTile icon="local_fire_department" value={session.type} label="session type" />
-        <TotalTile icon="fitness_center" value={String(exs.length)} label="exercises" />
-        <TotalTile icon="repeat" value={totalSets ? String(totalSets) : '·'} label="planned sets" />
-      </div>
+      {topSetValue ? (
+        /* How hard: the heaviest planned working set as the focal readout. */
+        <div style={{ marginTop: 18, padding: 18, borderRadius: 'var(--radius-card)', background: 'var(--surface-2)' }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text-2)' }}>Top set, {topSet!.exerciseName.toLowerCase()}</div>
+          <div style={{ fontSize: 56, fontWeight: 600, letterSpacing: '-0.03em', lineHeight: 1.05, marginTop: 4, color: 'var(--text-1)', fontVariantNumeric: 'tabular-nums' }}>{topSetValue}</div>
+          <div style={{ display: 'flex', gap: 20, marginTop: 10, fontSize: 13, color: 'var(--text-2)', fontVariantNumeric: 'tabular-nums' }}>
+            <span>{exs.length} exercise{exs.length === 1 ? '' : 's'}</span>
+            {totalSets > 0 && <span>{totalSets} set{totalSets === 1 ? '' : 's'}</span>}
+          </div>
+        </div>
+      ) : (
+        <div className="stat-row" style={{ marginTop: 18 }}>
+          <TotalTile icon="local_fire_department" value={session.type} label="session type" />
+          <TotalTile icon="fitness_center" value={String(exs.length)} label="exercises" />
+          <TotalTile icon="repeat" value={totalSets ? String(totalSets) : '·'} label="planned sets" />
+        </div>
+      )}
 
       {/* Structured warm-up (own collapsible block) */}
       <StructuredBlock kind="warmup" raw={session.warmup} />
@@ -199,9 +217,9 @@ export default async function PlannedSessionPreview({
               style={{ padding: 0, overflow: 'hidden', borderLeft: `3px solid ${block.isSuperset ? 'var(--accent-soft2)' : 'var(--border)'}` }}
             >
               {block.isSuperset && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 15px', borderBottom: '1px solid var(--border)', background: 'var(--accent-tint)', fontSize: 10.5, fontWeight: 700, letterSpacing: '0.1em', color: 'var(--accent)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '11px 15px', fontSize: 12, fontWeight: 600, color: 'var(--accent-text)' }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
-                  SUPERSET {block.tag} · ALTERNATE
+                  Superset {block.tag}: alternate
                 </div>
               )}
               {block.exercises.map((ex, ei) => (
@@ -212,8 +230,8 @@ export default async function PlannedSessionPreview({
                       <div style={{ minWidth: 30, height: 28, flex: 'none', padding: '0 9px', borderRadius: 9, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, background: 'var(--accent-soft)', color: 'var(--accent)' }}>{ex.badge}</div>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-                          <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.01em' }}>{ex.name}</div>
-                          <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent)', whiteSpace: 'nowrap' }}>{ex.scheme}</div>
+                          <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>{ex.name}</div>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-1)', whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{ex.scheme}</div>
                         </div>
                         {(ex.weight || ex.rest || ex.tempo || ex.timed) && (
                           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
@@ -256,7 +274,7 @@ export default async function PlannedSessionPreview({
           Start session
         </Link>
       </div>
-    </>
+    </div>
   );
 }
 
