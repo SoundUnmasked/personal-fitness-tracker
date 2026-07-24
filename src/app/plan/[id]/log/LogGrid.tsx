@@ -229,9 +229,6 @@ function workingCount(rows: SetRow[]): number { return rows.filter((r) => !r.war
 
 const FIELD_LABEL: Record<Field, string> = { kg: 'Weight · kg', reps: 'Reps', rpe: 'RPE · 0-10', dur: 'Time · sec' };
 const FIELD_UNIT: Record<Field, string> = { kg: 'kg', reps: 'reps', rpe: '/ 10', dur: 'sec' };
-// Fix 9: the primary keypad button cycles fields before it logs, so its label
-// always states what pressing it will actually do.
-const NEXT_WORD: Record<Field, string> = { kg: 'weight', reps: 'reps', rpe: 'RPE', dur: 'time' };
 const NOTIFY_ASKED = 'pft:notify-asked';
 
 // Field cycle order depends on whether the movement is rep- or time-based, and
@@ -283,6 +280,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   // re-save preserves it (fix 1).
   const [elapsed, setElapsed] = useState(plan.completed?.durationMin != null ? plan.completed.durationMin * 60 : 0);
   const [finishing, setFinishing] = useState(false);
+  // Stage 4: height the on-screen keyboard steals from the layout viewport, so
+  // the current-set card can be lifted to sit fully above the native keyboard.
+  const [kbInset, setKbInset] = useState(0);
   const restTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const restWasRunning = useRef(false);
   const restUpStart = useRef(0); // epoch ms anchor for the count-up mode
@@ -530,6 +530,19 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }, []);
   useEffect(() => { if (panel === 'tempo' && !activeHasTempo) setPanel('entry'); }, [active.ei, activeHasTempo, panel]);
 
+  // Stage 4: track how much of the layout viewport the native keyboard covers,
+  // so the fixed current-set card can be lifted to sit fully above it. The
+  // visualViewport shrinks when the keyboard opens; the inset is what it took.
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const onResize = () => setKbInset(Math.max(0, window.innerHeight - vv.height - vv.offsetTop));
+    vv.addEventListener('resize', onResize);
+    vv.addEventListener('scroll', onResize);
+    onResize();
+    return () => { vv.removeEventListener('resize', onResize); vv.removeEventListener('scroll', onResize); };
+  }, []);
+
   // Item 5: one time format everywhere.
   const mmss = fmtClock;
 
@@ -719,31 +732,40 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     }
   }
 
-  // Fix 1: entering a cell arms "replace mode" — the first keystroke replaces
-  // the whole pre-filled value (select-all semantics), so re-typing 30 over 40
-  // gives 30, not 4030. Any later keystroke appends as before.
-  const entryFresh = useRef(false);
+  // Stage 4: the current-set card's native inputs. Refs let a ledger tap or the
+  // "Log set" advance move focus to the right field synchronously, inside the
+  // user gesture, so the native keyboard opens (iOS only honours focus() from a
+  // gesture). The card is always mounted, so these stay valid.
+  const kgInputRef = useRef<HTMLInputElement>(null);
+  const midInputRef = useRef<HTMLInputElement>(null); // reps or duration
+  const rpeInputRef = useRef<HTMLInputElement>(null);
+  const inputRefFor = (field: Field): React.RefObject<HTMLInputElement | null> =>
+    field === 'kg' ? kgInputRef : field === 'rpe' ? rpeInputRef : midInputRef;
+  const focusField = (field: Field) => { inputRefFor(field).current?.focus(); };
 
   function tap(ei: number, si: number, field: Field) {
     if (sets[ei]?.[si]?.warmup && field === 'rpe') return; // fix 7: no RPE on warm-up rows
     if (sw.running) { if (swTimer.current) clearInterval(swTimer.current); setSw((s) => ({ ...s, running: false })); }
-    entryFresh.current = true;
-    setActive({ ei, si, field }); setPanel('entry');
+    setActive({ ei, si, field });
+    setPanel('entry');
+    // The card is already mounted, so focus lands on the matching native input
+    // and the decimal keyboard opens.
+    focusField(field);
   }
-  function press(v: string) {
-    const fresh = entryFresh.current;
-    entryFresh.current = false;
+
+  // Sanitise a native-input value: digits and a single decimal point, capped at
+  // four significant digits (matching the old keypad), then write it to the set.
+  // Editing an RPE value abandons any "7 or 8" range (fix 4).
+  function writeEntry(field: Field, raw: string) {
+    let v = raw.replace(/[^0-9.]/g, '');
+    const dot = v.indexOf('.');
+    if (dot !== -1) v = v.slice(0, dot + 1) + v.slice(dot + 1).replace(/\./g, '');
+    const digits = v.replace('.', '');
+    if (digits.length > 4) return; // ignore overtyping past four digits
     updateSets((all) => all.map((rows, ei) => ei !== active.ei ? rows : rows.map((row, si) => {
       if (si !== active.si) return row;
-      // First keystroke after entering the cell starts from empty (fix 1);
-      // backspace on a fresh cell clears it, like deleting a selection.
-      let cur = fresh ? '' : (row[active.field] || '');
-      if (v === 'back') cur = fresh ? '' : cur.slice(0, -1);
-      else if (v === '.') cur = cur.includes('.') ? cur : (cur === '' ? '0.' : cur + '.');
-      else if (cur.replace('.', '').length < 4) cur = cur + v;
-      // Editing the RPE value abandons any "7 or 8" range (fix 4).
-      const patch: Partial<SetRow> = { [active.field]: cur, suggested: false };
-      if (active.field === 'rpe') patch.rpeHi = '';
+      const patch: Partial<SetRow> = { [field]: v, suggested: false };
+      if (field === 'rpe') patch.rpeHi = '';
       return { ...row, ...patch };
     })));
   }
@@ -772,21 +794,21 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
     // user may still tap a rest timer explicitly).
     if (nowDone && !row?.warmup && !rest.running && !editMode) startRest(restFor(ei));
   }
-  function next() {
+  // Stage 4: "Log set" marks the active set done and advances to the next set.
+  // Ticking auto-starts this exercise's rest (which turns the current-set card
+  // into the rest timer), so we do not re-open the keyboard; the athlete taps
+  // the next set to resume typing after resting. Rest rules match toggle():
+  // never clobber a running timer (fix 2), no rest for warm-up rows (fix 7),
+  // none in edit mode (S1.3).
+  function logSet() {
     unlockAudio();
-    const order = fieldsForRowAt(active.ei, active.si);
-    const idx = order.indexOf(active.field);
-    if (idx > -1 && idx < order.length - 1) { entryFresh.current = true; setActive({ ...active, field: order[idx + 1] }); return; }
     const row = sets[active.ei]?.[active.si];
-    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, done: true } : r)));
+    updateSets((all) => all.map((rows, e) => e !== active.ei ? rows : rows.map((r, s) => s === active.si ? { ...r, done: true, suggested: false } : r)));
     const exSets = sets[active.ei];
     let na = active;
     if (active.si + 1 < exSets.length) na = { ei: active.ei, si: active.si + 1, field: fieldsForRowAt(active.ei, active.si + 1)[0] };
     else if (active.ei + 1 < sets.length) na = { ei: active.ei + 1, si: 0, field: fieldsForRowAt(active.ei + 1, 0)[0] };
-    entryFresh.current = true;
     setActive(na);
-    // Same rest rules as toggle(): don't clobber a running timer (fix 2), no
-    // rest for warm-up rows (fix 7), no auto-rest in edit mode (S1.3).
     if (!row?.warmup && !rest.running && !editMode) startRest(restFor(active.ei));
   }
   const addSet = (ei: number) => updateSets((all) => all.map((rows, e) => e === ei ? [...rows, emptyRow(false)] : rows));
@@ -896,11 +918,8 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
   }
 
   const activeVal = sets[active.ei]?.[active.si]?.[active.field] ?? '';
-  // Fix 9: what the primary button will do next for THIS row's field cycle.
+  // Which fields the active row exposes as native inputs, in order.
   const activeOrder = fieldsForRowAt(active.ei, active.si);
-  const activeFieldIdx = activeOrder.indexOf(active.field);
-  const nextField: Field | null =
-    activeFieldIdx > -1 && activeFieldIdx < activeOrder.length - 1 ? activeOrder[activeFieldIdx + 1] : null;
   const groups = useMemo(() => groupBySuperset(plan.exercises), [plan.exercises]);
   // Package P: the tempo block's superset siblings — the movements in the active
   // exercise's superset that carry a tempo, so it can offer tabs to alternate.
@@ -1148,7 +1167,7 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                       <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)' }}>{activeSetLabel}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: 'var(--text-faint)' }}>
                         <span className="msr" style={{ fontSize: 13 }} aria-hidden="true">touch_app</span>
-                        tap a cell, then use the keypad below
+                        tap a value to edit it in the card below
                       </div>
                     </div>
                   )}
@@ -1186,8 +1205,9 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
         </button>
       </div>
 
-      {/* Bottom entry panel */}
-      <div style={{ position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 40, maxWidth: 460, margin: '0 auto', padding: '10px 16px calc(22px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', borderTop: '1px solid var(--border)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)' }}>
+      {/* Bottom entry panel. Stage 4: lifted by the keyboard inset so the
+          current-set card stays fully visible above the native keyboard. */}
+      <div style={{ position: 'fixed', left: 0, right: 0, bottom: kbInset, zIndex: 40, maxWidth: 460, margin: '0 auto', padding: kbInset > 0 ? '10px 16px 12px' : '10px 16px calc(22px + env(safe-area-inset-bottom))', background: 'var(--panel-bg)', borderTop: '1px solid var(--border)', backdropFilter: 'blur(28px)', WebkitBackdropFilter: 'blur(28px)', transition: 'bottom 0.15s ease' }}>
         {notifyAsk && (
           <div className="note note-accent" style={{ marginBottom: 10 }}>
             <span className="msr-fill" aria-hidden="true">notifications_active</span>
@@ -1210,35 +1230,70 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
           <>
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
               <div className="seg" style={{ flex: 1 }}>
-                <button className={`seg-item ${panel === 'entry' ? 'active' : ''}`} onClick={() => setPanel('entry')}><span className="msr">dialpad</span>Keypad</button>
+                <button className={`seg-item ${panel === 'entry' ? 'active' : ''}`} onClick={() => setPanel('entry')}><span className="msr">article</span>Set</button>
                 <button className={`seg-item ${panel === 'rest' ? 'active' : ''}`} onClick={() => setPanel('rest')}><span className="msr">timer</span>Rest</button>
                 {activeHasTempo && <button className={`seg-item ${panel === 'tempo' ? 'active' : ''}`} onClick={() => setPanel('tempo')}><span className="msr">speed</span>Tempo</button>}
               </div>
-              <button onClick={() => setPanel('hidden')} aria-label="Hide keypad" style={{ width: 42, height: 38, flex: 'none', borderRadius: 11, background: 'var(--seg-track)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, border: 'none', cursor: 'pointer' }}>
+              <button onClick={() => setPanel('hidden')} aria-label="Hide entry panel" style={{ width: 42, height: 38, flex: 'none', borderRadius: 11, background: 'var(--seg-track)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, border: 'none', cursor: 'pointer' }}>
                 <span className="msr" aria-hidden="true">keyboard_arrow_down</span>
               </button>
             </div>
 
             {panel === 'entry' ? (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 11, padding: '0 2px' }}>
-                  <div style={{ fontSize: 12, fontWeight: 600, letterSpacing: '0.04em', color: 'var(--text-faint)' }}>{activeSetLabel} · {FIELD_LABEL[active.field]}</div>
-                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
-                    <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em' }}>
-                      {activeVal === '' ? '0' : activeVal}
-                      {active.field === 'rpe' && activeRow?.rpeHi ? `-${activeRow.rpeHi}` : ''}
+                {/* Current-set card: the focal editing surface. Each field is a
+                    native decimal input (inputmode="decimal"), so tapping one
+                    opens the phone keyboard rather than a custom pad. */}
+                <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10, padding: '0 2px', gap: 10 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>{activeSetLabel}</div>
+                  {(activeRow?.prevKg || activeRow?.prevReps) && (
+                    <div style={{ fontSize: 11.5, color: 'var(--text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      Last time {activeRow.prevKg ? `${activeRow.prevKg} kg` : ''}{activeRow.prevKg && activeRow.prevReps ? ' × ' : ''}{activeRow.prevReps ?? ''}
                     </div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-dim)' }}>{FIELD_UNIT[active.field]}</div>
-                  </div>
+                  )}
                 </div>
 
-                {/* Fix 4: one-tap honest uncertainty — "7 or 8" instead of a forced number. */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                  {activeOrder.map((f) => {
+                    const isActive = active.field === f;
+                    const ref = f === 'kg' ? kgInputRef : f === 'rpe' ? rpeInputRef : midInputRef;
+                    const raw = activeRow?.[f] ?? '';
+                    return (
+                      <label key={f} style={{ flex: 1, minWidth: 0, display: 'block', margin: 0 }}>
+                        <span style={{ display: 'block', fontSize: 11, fontWeight: 500, color: 'var(--text-3)', marginBottom: 4 }}>{FIELD_LABEL[f]}</span>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: 3, height: 52, padding: '0 12px', borderRadius: 'var(--radius-input)', background: 'var(--surface-3)', boxShadow: isActive ? 'inset 0 -2px 0 0 var(--accent)' : 'none' }}>
+                          <input
+                            ref={ref}
+                            inputMode="decimal"
+                            enterKeyHint="next"
+                            value={raw}
+                            placeholder="0"
+                            aria-label={`${activeSetLabel}, ${FIELD_LABEL[f]}`}
+                            onFocus={(e) => { setActive((a) => ({ ...a, field: f })); selectAllOnFocus(e); }}
+                            onChange={(e) => writeEntry(f, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter') return;
+                              e.preventDefault();
+                              const i = activeOrder.indexOf(f);
+                              if (i > -1 && i < activeOrder.length - 1) focusField(activeOrder[i + 1]);
+                              else logSet();
+                            }}
+                            style={{ flex: 1, minWidth: 0, width: '100%', height: '100%', border: 'none', background: 'transparent', color: raw === '' ? 'var(--text-3)' : 'var(--text-1)', fontSize: 24, fontWeight: 600, letterSpacing: '-0.02em', padding: 0, fontVariantNumeric: 'tabular-nums' }}
+                          />
+                          <span style={{ flex: 'none', fontSize: 12, fontWeight: 500, color: 'var(--text-2)' }}>{FIELD_UNIT[f]}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* Fix 4: one-tap honest uncertainty, "7 or 8" instead of a forced number. */}
                 {active.field === 'rpe' && (
                   <button
                     onClick={toggleRpeRange}
                     disabled={activeVal === ''}
                     aria-pressed={!!activeRow?.rpeHi}
-                    style={{ width: '100%', height: 44, marginBottom: 10, borderRadius: 13, fontSize: 13.5, fontWeight: 700, cursor: 'pointer', border: '1px solid var(--accent-line)', background: activeRow?.rpeHi ? 'var(--accent)' : 'var(--accent-soft)', color: activeRow?.rpeHi ? 'var(--on-accent)' : 'var(--accent)', opacity: activeVal === '' ? 0.5 : 1 }}
+                    style={{ width: '100%', height: 44, marginBottom: 10, borderRadius: 'var(--radius-input)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', border: '1px solid var(--accent-line)', background: activeRow?.rpeHi ? 'var(--accent)' : 'var(--accent-soft)', color: activeRow?.rpeHi ? 'var(--on-accent)' : 'var(--accent-text)', opacity: activeVal === '' ? 0.5 : 1 }}
                   >
                     {activeRow?.rpeHi
                       ? `Logged as ${activeVal} or ${activeRow.rpeHi} · tap for exactly ${activeVal}`
@@ -1249,28 +1304,20 @@ export default function LogGrid({ plan }: { plan: LogPlan }) {
                 )}
 
                 {active.field === 'dur' && (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '10px 12px', borderRadius: 13, background: 'var(--surface)', border: '1px solid var(--border)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, padding: '10px 12px', borderRadius: 'var(--radius-input)', background: 'var(--surface-1)' }}>
                     <span className="msr-fill" style={{ fontSize: 20, color: sw.running ? 'var(--accent)' : 'var(--text-dim)' }} aria-hidden="true">timer</span>
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--text-faint)' }}>Count-up timer</div>
-                      <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>{mmss(sw.running ? sw.elapsed : (Number(activeVal) || 0))}</div>
+                      <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}>{mmss(sw.running ? sw.elapsed : (Number(activeVal) || 0))}</div>
                     </div>
-                    <button onClick={durToggle} className="btn-sm" style={{ height: 40, minWidth: 96, background: sw.running ? 'var(--accent)' : 'var(--accent-soft)', color: sw.running ? 'var(--on-accent)' : 'var(--accent)', border: sw.running ? 'none' : '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+                    <button onClick={durToggle} className="btn-sm" style={{ height: 40, minWidth: 96, background: sw.running ? 'var(--accent)' : 'var(--accent-soft)', color: sw.running ? 'var(--on-accent)' : 'var(--accent-text)', border: sw.running ? 'none' : '1px solid var(--accent-line)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
                       <span className="msr-fill" style={{ fontSize: 18 }} aria-hidden="true">{sw.running ? 'stop' : 'play_arrow'}</span>{sw.running ? 'Stop' : 'Start'}
                     </button>
                   </div>
                 )}
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                  {['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'back'].map((k) => (
-                    <button key={k} onClick={() => press(k)} style={{ height: 44, border: '1px solid var(--border)', borderRadius: 13, background: 'var(--key-bg)', color: 'var(--text)', fontSize: 21, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
-                      {k === 'back' ? '⌫' : k}
-                    </button>
-                  ))}
-                </div>
-                <button className="btn" style={{ height: 50, marginTop: 10, borderRadius: 14 }} onClick={next}>
-                  {nextField ? `Next: ${NEXT_WORD[nextField]}` : 'Log set'}
-                  <span className="msr-fill" style={{ fontSize: 20 }}>{nextField ? 'arrow_forward' : 'check'}</span>
+                <button className="btn" style={{ height: 50, marginTop: 2, borderRadius: 'var(--radius-button)' }} onClick={logSet}>
+                  Log set<span className="msr-fill" style={{ fontSize: 20 }} aria-hidden="true">check</span>
                 </button>
               </>
             ) : panel === 'rest' ? (
